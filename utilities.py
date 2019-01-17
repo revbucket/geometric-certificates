@@ -2,6 +2,8 @@ import numpy as np
 import torch
 
 
+
+
 ##########################################################################
 #                                                                        #
 #                   NEURAL CONFIG UTILITIES                              #
@@ -114,5 +116,20 @@ def is_same_hyperplane(a1, b1, a2, b2, tolerance=1e-8):
 
     # if b's are different signs, then a1/b1 ~ a2/b2
     return fuzzy_vector_equal(a1 / b1, a2 / b2, tolerance=tolerance)
+
+
+##########################################################################
+#                                                                        #
+#                               SAFETY DANCE                             #
+#                                                                        #
+##########################################################################
+
+def as_numpy(tensor_or_array):
+    """ If given a tensor or numpy array returns that object cast numpy array
+    """
+
+    if isinstance(tensor_or_array, torch.Tensor):
+        tensor_or_array = tensor_or_array.cpu().detach().numpy()
+    return tensor_or_array
 
 

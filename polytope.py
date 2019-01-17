@@ -21,11 +21,8 @@ class Polytope(object):
             ub_A = ub_A.cpu().detach().numpy()
         if isinstance(ub_b, torch.Tensor):
             ub_b = ub_b.cpu().detach().numpy()
-        self.ub_A = ub_A
-        self.ub_b = ub_b
-
-        self.eq_A = None
-        self.eq_b = None
+        self.ub_A = utils.as_numpy(ub_A)
+        self.ub_b = utils.as_numpy(ub_b)
         self.config = None
 
     def generate_facets(self, check_feasible=False):
@@ -43,7 +40,8 @@ class Polytope(object):
     def is_point_feasible(self, x):
         """ Returns True if point X satisifies all constraints, false otherwise
         """
-        pass
+        return all(np.matmul(self.ub_A, x) <= self.ub_b)
+
 
 
 
@@ -53,7 +51,16 @@ class Polytope(object):
 
             If x is not feasible, return -1
         """
-        pass
+
+        # l_inf dist to each polytope is (b_i - a_i^T x) / ||a_i||_1
+        # l_inf dist to all bounds is (b - Ax) * diag(1/||a_i||_1)
+
+        slack = self.ub_b - self.ub_A.matmul(x)
+        norms = np.diag(1 / np.linalg(self.ub_A, ord=1, axis=1))
+        dists = slack.matmul(norms)
+        argmin_0 = np.argmin(dists)[0]
+        return dists[argmin_0], argmin_0
+
 
 
 
@@ -181,6 +188,54 @@ class Face(Polytope):
 
         return utils.config_hamming_distance(self.config, other.config) == 1
 
+
+    def linf_dist(self, x):
+        """ Returns the l_inf distance to point x """
+        tight_list = list(self.tight_set)
+        # set up the linear program
+        # min_{t,v} t
+        # s.t.
+        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
+        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
+        # 3)  v <= t * 1           (<==>)    v_i - t <= 0
+        # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
+
+        # optimization variable is [t, v]
+        dim = x.shape[0] + 1
+        c = np.zeros(dim)
+        c[0] = 1
+
+        # Constraint 1
+        constraint_1a = self.poly_a
+        constraint_1b = self.poly_b - self.poly_a.matmul(x)
+
+        # Constraint 2
+        constraint_2a = self.poly_a[tight_list, :]
+        constraint_2b = self.poly_b[tight_list] -\
+                        self.poly_a[tight_list, :].matmul(x)
+        # Constraint 3
+        constraint_3a = np.identity(dim)
+        constraint_3a[0] = -1
+        constraint_3b = np.zeros(dim)
+
+        # Constraint 4
+        constraint_4a = -1 * np.identity(dim)
+        constraint_4b = np.zeros(dim)
+
+        ub_a = np.concatenate(constraint_1a, constraint_3a, constraint_4a)
+        ub_b = np.concatenate(constraint_1a, constraint_3b, constraint_4b)
+
+        bounds = [(0, None)] + [(None, None) for _ in range(dim - 1)]
+        # Solve linprog
+        linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
+                                        A_eq=constraint_2a,
+                                        b_eq=constraint_2b,
+                                        bounds=bounds)
+
+        if linprog_result.status == 0:
+            return linprog_result.fun
+        else:
+            raise Exception("LINPROG FAILED: " + linprog_result.message)
 
 
 
