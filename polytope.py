@@ -1,5 +1,6 @@
 import utilities as utils
 import torch
+import numpy as np
 
 ##########################################################################
 #                                                                        #
@@ -29,7 +30,7 @@ class Polytope(object):
         num_constraints = self.ub_A.shape[0]
         facets = []
         for i in range(num_constraints):
-            facet = Face(self.ub_A, self.ub_b, set([i]), config=config)
+            facet = Face(self.ub_A, self.ub_b, [i]), config=self.config)
             if check_feasible:
                 facet.check_feasible()
             facet.check_facet()
@@ -56,7 +57,7 @@ class Polytope(object):
         # l_inf dist to all bounds is (b - Ax) * diag(1/||a_i||_1)
 
         slack = self.ub_b - self.ub_A.matmul(x)
-        norms = np.diag(1 / np.linalg(self.ub_A, ord=1, axis=1))
+        norms = np.diag(1.0 / np.linalg(self.ub_A, ord=1, axis=1))
         dists = slack.matmul(norms)
         argmin_0 = np.argmin(dists)[0]
         return dists[argmin_0], argmin_0
@@ -65,13 +66,13 @@ class Polytope(object):
 
 
 class Face(Polytope):
-    def __init__(self, poly_a, poly_b, tight_set, config=None):
+    def __init__(self, poly_a, poly_b, tight_list, config=None):
         super(Polytope, self).__init__(ub_A, ub_b, )
         self.poly_a = poly_a
         self.poly_b = poly_b
-        self.a_eq = self.poly_a[tight_indices]
-        self.b_eq = self.poly_b[tight_indices]
-        self.tight_set = tight_set
+        self.a_eq = self.poly_a[tight_list]
+        self.b_eq = self.poly_b[tight_list]
+        self.tight_list = tight_list
         self.config = config
         self.is_feasible = None
         self.is_facet = None
@@ -85,7 +86,7 @@ class Face(Polytope):
 
         # Set up feasibility check Linear program
         c = np.zeros(self.poly_b.shape)
-        tight_indices = np.array(sorted(self.tight_set))
+        tight_indices = np.array(sorted(self.tight_list))
 
 
         bounds = [(None, None) for _ in c]
@@ -145,11 +146,11 @@ class Face(Polytope):
         if not (self.check_facet() and other.check_facet()):
             return False
         # if they lie in different hyperplanes, then return False
-        self_tight = list(self.tight_set)[0]
+        self_tight = self.tight_list[0]
         self_a = self.poly_a[self_tight, :]
         self_b = self.poly_b(self_tight)
 
-        other_tight = list(other.tight_set)[0]
+        other_tight = other.tight_list[0]
         other_a = other.poly_a[other_tight, :]
         other_b = other.poly_b[other_tight]
 
@@ -172,7 +173,7 @@ class Face(Polytope):
         # now just return True if their intersection is dimension (n-1)
         new_face = Face(np.concatenate(self.poly_a, other.poly_a),
                         np.concatenate(self.poly_b, other.poly_b),
-                        tight_set = self.tight_set)
+                        tight_list=self.tight_list)
         return new_face.check_facet()
 
 
@@ -196,7 +197,7 @@ class Face(Polytope):
 
     def linf_dist(self, x):
         """ Returns the l_inf distance to point x """
-        tight_list = list(self.tight_set)
+
         # set up the linear program
         # min_{t,v} t
         # s.t.
@@ -215,9 +216,9 @@ class Face(Polytope):
         constraint_1b = self.poly_b - self.poly_a.matmul(x)
 
         # Constraint 2
-        constraint_2a = self.poly_a[tight_list, :]
-        constraint_2b = self.poly_b[tight_list] -\
-                        self.poly_a[tight_list, :].matmul(x)
+        constraint_2a = self.poly_a[self.tight_list, :]
+        constraint_2b = self.poly_b[self.tight_list] -\
+                        self.poly_a[self.tight_list, :].matmul(x)
         # Constraint 3
         constraint_3a = np.identity(dim)
         constraint_3a[0] = -1
