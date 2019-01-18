@@ -104,6 +104,11 @@ class Face(Polytope):
         """ Checks if this polytope is a (n-1) face and stores the result"""
         if self.is_facet is not None:
             return self.is_facet
+
+        if self.is_feasible is not None and not self.is_feasible:
+            self.is_facet = False
+            return self.is_facet
+
         m, n = self.poly_a.shape
         # Dimension check of (n-1) facet
         # Do min -t
