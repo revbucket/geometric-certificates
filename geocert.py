@@ -22,16 +22,25 @@ def compute_boundary_batch(polytope_list):
         boundary
     """
 
-    total_facets = [facet for facet in
-                    poly.generate_facets(check_feasible=True)
-                    for poly in polytope_list]
+    total_facets = [facet for poly in polytope_list for facet in poly.generate_facets(check_feasible=True)]
 
 
     unshared_facets = []
+    shared_facets = []
+
     for og_facet in total_facets:
-        if any(og_facet.check_same_facet_pg(ex_facet)
-               for ex_facet in unshared_facets):
+        bool_unshared = [og_facet.check_same_facet_pg(ex_facet)
+               for ex_facet in unshared_facets]
+        bool_shared = [og_facet.check_same_facet_pg(ex_facet)
+               for ex_facet in shared_facets]
+
+        if any(bool_shared):
             continue
+        elif any(bool_unshared):
+            index = bool_unshared.index(True)
+            shared_facet = unshared_facets[index]
+            unshared_facets.remove(shared_facet)
+            shared_facets.append(shared_facet)
         else:
             unshared_facets.append(og_facet)
 
@@ -74,10 +83,10 @@ class HeapElement(object):
         self.exact_or_estimate = exact_or_estimate
 
     def __cmp__(self, other):
-        return cmp(self.l_inf_dist, other.l_inf_dist)
+        return __cmp__(self.l_inf_dist, other.l_inf_dist)
 
 
-def incremental_geocert(net, x):
+def incremental_geocert(plnn, x):
     """ Computes l_inf distance to decision boundary in
     """
 
