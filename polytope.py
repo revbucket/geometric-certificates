@@ -24,13 +24,13 @@ class Polytope(object):
             ub_b = ub_b.cpu().detach().numpy()
         self.ub_A = utils.as_numpy(ub_A)
         self.ub_b = utils.as_numpy(ub_b)
-        self.config = None
+        self.config = config
 
     def generate_facets(self, check_feasible=False):
         num_constraints = self.ub_A.shape[0]
         facets = []
         for i in range(num_constraints):
-            facet = Face(self.ub_A, self.ub_b, [i]), config=self.config)
+            facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
             if check_feasible:
                 facet.check_feasible()
             facet.check_facet()
@@ -65,15 +65,14 @@ class Polytope(object):
 
 
 
+
+
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
-        super(Polytope, self).__init__(ub_A, ub_b, )
-        self.poly_a = poly_a
-        self.poly_b = poly_b
+        super(Polytope, self).__init__(poly_a, poly_b, config=config)
         self.a_eq = self.poly_a[tight_list]
         self.b_eq = self.poly_b[tight_list]
         self.tight_list = tight_list
-        self.config = config
         self.is_feasible = None
         self.is_facet = None
         self.interior = None
