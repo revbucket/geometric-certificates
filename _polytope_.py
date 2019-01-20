@@ -2,6 +2,7 @@ import utilities as utils
 import torch
 import numpy as np
 import scipy.optimize as opt
+import matplotlib.pyplot as plt
 
 ##########################################################################
 #                                                                        #
@@ -25,9 +26,11 @@ class Polytope(object):
             ub_b = ub_b.cpu().detach().numpy()
         self.ub_A = utils.as_numpy(ub_A)
         self.ub_b = utils.as_numpy(ub_b)
-        self.config = None
+        self.config = config
 
     def generate_facets(self, check_feasible=False):
+        """ Generates all (n-1) dimensional facets of polytope
+        """
         num_constraints = self.ub_A.shape[0]
         facets = []
         for i in range(num_constraints):
@@ -39,6 +42,7 @@ class Polytope(object):
 
             if facet.is_facet:
                 facets.append(facet)
+
         return facets
 
     def is_point_feasible(self, x):
@@ -48,7 +52,6 @@ class Polytope(object):
         bools = [lhs.reshape((lhs.size,)) <= self.ub_b][0]
 
         return all(bools)
-
 
 
 
@@ -140,12 +143,16 @@ class Face(Polytope):
                                      b_ub=self.poly_b,
                                      A_eq=a_eq_new,
                                      b_eq=self.b_eq,
-                                     bounds=bounds)
+                                     bounds=bounds, method='interior-point')
+
 
         if (linprog_result.status == 0 and
             linprog_result.fun < 0):
             self.is_facet = True
             self.interior = linprog_result.x
+        elif linprog_result == 3:
+            print('error, unbounded, in linprog for check facet')
+
         return self.is_facet
 
 
@@ -190,6 +197,46 @@ class Face(Polytope):
                         tight_list=np.hstack((self.tight_list, new_tight_list)))
         return new_face.check_facet()
 
+    def check_same_facet_pg_slow(self, other):
+        """ Checks if this facet is the same as the other facet. Assumes
+            that self and other are perfectly glued if they intersect at all
+
+            Method uses PyPi library 'polytope' to compare
+        """
+        P1 = utils.Polytope_2(self.ub_A, self.ub_b)
+        P2 = utils.Polytope_2(other.ub_A, other.ub_b)
+
+        V1 = utils.ptope.extreme(P1)
+        V2 = utils.ptope.extreme(P2)
+
+        V1_ = []
+        for vertex in V1:
+            flag = utils.fuzzy_equal(np.matmul(self.a_eq, vertex), self.b_eq)
+            if flag:
+                V1_.append(vertex)
+
+        V2_ = []
+        for vertex in V2:
+            flag = utils.fuzzy_equal(np.matmul(other.a_eq, vertex), other.b_eq)
+            if flag:
+                V2_.append(vertex)
+
+        if len(V1_) == len(V2_):
+
+            flags = []
+            for vertex in V1_:
+                flags_2 = []
+                for vertex_2 in V2_:
+                    if np.allclose(vertex, vertex_2, atol=1e-6):
+                        flags_2.append(True)
+                    else:
+                        flags_2.append(False)
+                flags.append(any(flags_2))
+
+            return all(flags)
+
+        else:
+            return False
 
     def check_same_facet_config(self, other):
         """ Potentially faster technique to check facets are the same
@@ -221,40 +268,34 @@ class Face(Polytope):
         # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
 
         # optimization variable is [t, v]
-        dim = x.shape[0] + 1
-        c = np.zeros(dim)
+        n = x.shape[0]
+        m = self.poly_a.shape[0]
+        c = np.zeros(n+1)
         c[0] = 1
 
         # Constraint 1
-        constraint_1a = self.poly_a
-        constraint_1b = self.poly_b - np.matmul(self.poly_a, x)
+        constraint_1a = np.hstack((np.zeros((m, 1)), self.poly_a))
+        constraint_1b = self.poly_b - np.matmul(self.poly_a, x)[:, 0]
 
         # Constraint 2
-        constraint_2a = self.poly_a[self.tight_list, :]
-        result = np.matmul(self.poly_a[self.tight_list, :], x)
-        constraint_2b = self.poly_b[self.tight_list] -\
-                        result
+        constraint_2a = constraint_1a[self.tight_list, :]
+        constraint_2b = self.poly_b[self.tight_list] - np.matmul(self.poly_a[self.tight_list, :], x)
+
+
         # Constraint 3
-        constraint_3a = np.identity(dim)
-        constraint_3a[0] = -1
-        constraint_3b = np.zeros(dim)
+        constraint_3a = np.hstack((-1*np.ones((n, 1)), np.identity(n)))
+        constraint_3b = np.zeros(n)
 
         # Constraint 4
-        constraint_4a = -1 * np.identity(dim)
-        constraint_4b = np.zeros(dim)
+        constraint_4a = np.hstack((-1*np.ones((n, 1)), -1*np.identity(n)))
+        constraint_4b = np.zeros(n)
+
+        ub_a = np.vstack((constraint_1a, constraint_3a, constraint_4a))
+        ub_b = np.hstack((constraint_1b, constraint_3b, constraint_4b))
+
+        bounds = [(0, None)] + [(None, None) for _ in range(n)]
 
 
-        print(constraint_1a)
-        print(constraint_3a)
-        print(constraint_4a)
-
-        import time
-        time.sleep(1.0)
-
-        ub_a = np.concatenate(constraint_1a, constraint_3a, constraint_4a)
-        ub_b = np.concatenate(constraint_1a, constraint_3b, constraint_4b)
-
-        bounds = [(0, None)] + [(None, None) for _ in range(dim - 1)]
         # Solve linprog
         linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
                                         A_eq=constraint_2a,
@@ -267,4 +308,14 @@ class Face(Polytope):
             raise Exception("LINPROG FAILED: " + linprog_result.message)
 
 
+    def get_inequality_constraints(self):
+
+        """ Converts equality constraints into inequality constraints
+            and gathers them all together
+        """
+
+        A = np.vstack((self.poly_a, np.multiply(self.a_eq, -1.0)))
+        b = np.hstack((self.poly_b, np.multiply(self.b_eq, -1.0)))
+
+        return A, b
 

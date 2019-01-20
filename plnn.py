@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utilities import *
+
 class PLNN(nn.Module):
     """ Simple piecewise neural net.
         Fully connected layers and ReLus only
@@ -28,10 +30,11 @@ class PLNN(nn.Module):
             return configs
 
 
-    def compute_polytope_config(self, configs):
+    def compute_polytope_config(self, configs, comparison_form_flag=False):
 
         lambdas = [torch.diag(config) for config in configs]
         js = [torch.diag(-2 * config + 1) for config in configs]
+
         # Compute Z_k = W_k * x + b_k for each layer
         wks = [self.fcs[0].weight]
         bks = [self.fcs[0].bias]
@@ -49,8 +52,13 @@ class PLNN(nn.Module):
             a_stack.append(j.matmul(wk))
             b_stack.append(-j.matmul(bk))
 
-        polytope_A = torch.cat(a_stack, dim=0)
-        polytope_b = torch.cat(b_stack, dim=0)
+        polytope_A = torch.cat(a_stack, dim=0).detach().numpy()
+        polytope_b = torch.cat(b_stack, dim=0).detach().numpy()
+
+        if(comparison_form_flag):
+            polytope_A, polytope_b = comparison_form(polytope_A, polytope_b)
+
+
         return {'poly_a': polytope_A,
                 'poly_b': polytope_b,
                 'configs': configs,

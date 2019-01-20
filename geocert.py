@@ -3,7 +3,7 @@
 
 """
 
-from polytope import Polytope, Face, from_polytope_dict
+from _polytope_ import Polytope, Face, from_polytope_dict
 import utilities as utils
 import torch
 import numpy as np
@@ -17,22 +17,38 @@ import heapq
 
 # Batched algorithm is when the union of polytopes is specified beforehand
 
-def compute_boundary_batch(polytope_list):
+def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
     """ Takes in a list of polytopes and outputs the facets that define the
         boundary
     """
 
     total_facets = [facet for poly in polytope_list for facet in poly.generate_facets(check_feasible=True)]
 
+    print('num total facets:', len(total_facets))
 
     unshared_facets = []
     shared_facets = []
 
     for og_facet in total_facets:
-        bool_unshared = [og_facet.check_same_facet_pg(ex_facet)
-               for ex_facet in unshared_facets]
-        bool_shared = [og_facet.check_same_facet_pg(ex_facet)
-               for ex_facet in shared_facets]
+
+        if comparison_method == 'slow':
+            bool_unshared = [og_facet.check_same_facet_pg_slow(ex_facet)
+                             for ex_facet in unshared_facets]
+
+            bool_shared = [og_facet.check_same_facet_pg_slow(ex_facet)
+                           for ex_facet in shared_facets]
+
+        elif comparison_method == 'unstable':
+            bool_unshared = [og_facet.check_same_facet_pg(ex_facet)
+                   for ex_facet in unshared_facets]
+            bool_shared = [og_facet.check_same_facet_pg(ex_facet)
+                   for ex_facet in shared_facets]
+
+        elif comparison_method == 'fast_ReLu':
+            bool_unshared = [og_facet.check_same_facet_config(ex_facet)
+                   for ex_facet in unshared_facets]
+            bool_shared = [og_facet.check_same_facet_config(ex_facet)
+                   for ex_facet in shared_facets]
 
         if any(bool_shared):
             continue
@@ -44,23 +60,31 @@ def compute_boundary_batch(polytope_list):
         else:
             unshared_facets.append(og_facet)
 
-    return unshared_facets
+    print('num boundary_facets', len(unshared_facets))
+    print('num shared_facets',  len(shared_facets))
+
+    return unshared_facets, shared_facets
 
 
-def compute_l_inf_ball_batch(polytope_list, x):
+
+def compute_l_inf_ball_batch(polytope_list, x, comp_method = 'slow'):
     """ Computes the distance from x to the boundary of the union of polytopes
+
+        Comparison method options: {slow | unstable | fast_ReLu}
     """
 
     # First check if x is in one of the polytopes
     if not any(poly.is_point_feasible(x) for poly in polytope_list):
         return -1
 
-
-    boundary = compute_boundary_batch(polytope_list)
+    print('========================================')
+    print('Computing Boundary')
+    print('========================================')
+    boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
 
     dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
 
-    return min(dist_to_boundary)
+    return min(dist_to_boundary), boundary, shared_facets
 
 
 

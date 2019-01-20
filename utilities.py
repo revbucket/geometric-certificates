@@ -1,7 +1,9 @@
 import numpy as np
 import torch
-
-
+import matplotlib.pyplot as plt
+from bitstring import BitArray
+import polytope as ptope
+import matplotlib.patches as patches
 
 
 ##########################################################################
@@ -89,6 +91,7 @@ def fuzzy_vector_equal(x_vec, y_vec, tolerance=1e-8):
      """
     return all(abs(el) < tolerance for el in x_vec - y_vec)
 
+
 def is_same_hyperplane(a1, b1, a2, b2, tolerance=1e-8):
     """ Given two hyperplanes of the form <a1, x> =b1, <a2, x> =b2
         this returns true if the two define the same hyperplane.
@@ -132,4 +135,241 @@ def as_numpy(tensor_or_array):
         tensor_or_array = tensor_or_array.cpu().detach().numpy()
     return tensor_or_array
 
+
+##########################################################################
+#                                                                        #
+#                         Plotting Utilities                             #
+#                                                                        #
+##########################################################################
+
+def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
+                   xylim=5, ax=plt.axes(), linestyle='dashed', linewidth=0):
+    """Plots a list of polytopes which exist in R^2.
+    """
+    if colors == None:
+        colors = [np.random.rand(3) for _ in range(0, len(poly_list))]
+
+    for poly, color in zip(poly_list, colors):
+        P = Polytope_2(poly.ub_A, poly.ub_b)
+        V = ptope.extreme(P)
+
+        if V is not None:
+            P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
+
+        else:
+            print('a polytope was not plotted')
+
+    plt.xlim(-xylim, xylim)
+    plt.ylim(-xylim, xylim)
+
+
+def plot_facets_2d(facet_list, alpha=1.0,
+                   xylim=5, ax=plt.axes(), linestyle='solid', linewidth=3, color='black'):
+    """Plots a list of facets which exist as line segments in R^2
+    """
+
+    for facet in facet_list:
+        P = Polytope_2(facet.ub_A, facet.ub_b)
+        vertices = ptope.extreme(P)
+
+        facet_vertices = []
+        if vertices is not None:
+            for vertex in vertices:
+                equal = fuzzy_equal(np.dot(facet.a_eq[0], vertex), facet.b_eq[0])
+                if equal:
+                    facet_vertices.append(vertex)
+            x1 = facet_vertices[0][0]; x2 = facet_vertices[1][0]
+            y1 = facet_vertices[0][1]; y2 = facet_vertices[1][1]
+            x = [x1, x2]; y = [y1, y2]
+
+            ax.plot(x, y, c=color, linestyle=linestyle, linewidth=linewidth)
+
+    plt.xlim(-xylim, xylim)
+    plt.ylim(-xylim, xylim)
+
+
+def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
+    """Plots linf norm ball of size t centered at x_0 (only in R^2)
+    """
+    rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
+    ax.add_patch(rect)
+
+
+def get_spaced_colors(n):
+    """Given number, n, returns n colors which are visually well distributed
+    """
+    max_value = 16581375  # 255**3
+    interval = int(max_value / n)
+    colors = [hex(I)[2:].zfill(6) for I in range(0, max_value, interval)]
+
+    return [(int(i[:2], 16) / 255.0, int(i[2:4], 16) / 255.0, int(i[4:], 16) / 255.0, 1) for i in colors]
+
+
+def get_color_dictionary(list):
+    """Creates a dictionary of evenly spaced colors, keys are elements in provided lists
+    """
+    n = len(list)
+    colors = get_spaced_colors(n)
+    color_dict = {}
+
+    for element, color in zip(list, colors):
+        color_dict[element] = color
+
+    return color_dict
+
+
+# ------------------------------------
+# Polytope class from PyPi library
+# ------------------------------------
+""" Modified class is used for plotting polytopes and utilizing other functions 
+    from 'polytope' library
+"""
+
+class Polytope_2(ptope.Polytope):
+    def __init__(
+            self, A=np.array([]), b=np.array([]), minrep=False,
+            chebR=0, chebX=None, fulldim=None,
+            volume=None, vertices=None, normalize=True):
+        super(Polytope_2, self).__init__(A, b, minrep, chebR, chebX,
+                                            fulldim, volume, vertices, normalize)
+
+    def plot(self, ax=None, color=None,
+             hatch=None, alpha=1.0, linestyle='dashed', linewidth=3):
+        if self.dim != 2:
+            raise Exception("Cannot plot polytopes of dimension larger than 2")
+        ax = _newax(ax)
+        if not ptope.is_fulldim(self):
+            print("Cannot plot empty polytope")
+            return None
+        if color is None:
+            color = np.random.rand(3)
+        poly = _get_patch(
+            self, facecolor=color, hatch=hatch,
+            alpha=alpha, linestyle=linestyle, linewidth=linewidth,
+            edgecolor='black')
+        ax.add_patch(poly)
+        return ax
+
+# --------------------------------------------------------------------------------------
+# Ugly Plotting Code
+# --------------------------------------------------------------------------------------
+
+def binarize_relu_configs( relu_configs):
+    """ Takes a list of relu configs and turns them into one long binary string
+        (each element i of relu_configs is assumed to be an array of relu acts at layer i)
+    """
+    long_code = [element.data.numpy() for code in relu_configs for element in code]
+    bin_code = np.asarray(long_code).astype(int)
+    return bin_code
+
+def get_unique_relu_configs(network, xylim, numpts):
+    """ Samples within a square of size (2*xylim) x (2*xylim), and returns the unique
+        ReLu activations. Total number of samples is numpts^2
+
+        Returns: unique relu_configs    =>  (list of arrays of unique ReLu acts)
+                 unique_bin_acts        =>  (list of unique ReLu acts as a binary string)
+                 xs                     =>  (points sampled)
+                 num_activations        =>  (list of unique numbers associated with Relu acts)
+    """
+
+    num_activations = []
+    relu_configs_list = []
+    xs = []
+
+    for x in np.linspace(-xylim, xylim, numpts):
+        for y in np.linspace(-xylim, xylim, numpts):
+            pt_0 = torch.Tensor([x, y]).type(torch.float32)
+            relu_configs = network.relu_config(pt_0, False)
+            bin_code = binarize_relu_configs(relu_configs)
+            bin_list = np.ndarray.tolist(bin_code)
+            num = BitArray(bin_list).uint
+
+            xs.append(pt_0.data.numpy())
+            num_activations.append(num)
+            relu_configs_list.append(relu_configs)
+
+    unique_bin_acts = set(num_activations)
+    indices = [num_activations.index(unique_bin_act) for unique_bin_act in unique_bin_acts]
+
+    unique_relu_configs_list = [relu_configs_list[index] for index in indices]
+
+    return unique_relu_configs_list, unique_bin_acts, xs, num_activations
+
+
+
+def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
+    """ Roughly plots polytopes in 2d for given network. Samples within a square of size
+        (2*xylim) x (2*xylim), and plots an identifying color for each unique ReLu configuration.
+        Total number of samples is numpts^2
+    """
+    _, unique_bin_acts, xs, num_activations = get_unique_relu_configs(network, xylim, numpts)
+    color_dict = get_color_dictionary(unique_bin_acts)
+    plt.figure(figsize=(10, 10))
+
+    for unique_act in unique_bin_acts:
+        indices = [index for index, element in enumerate(num_activations) if element == unique_act]
+        x_pts_to_plot = [xs[index][0] for index in indices]
+        y_pts_to_plot = [xs[index][1] for index in indices]
+        colors = [color_dict[unique_act] for _ in range(0, len(x_pts_to_plot))]
+        plt.scatter(x_pts_to_plot, y_pts_to_plot, label=str(unique_act), c=colors)
+
+    # print('unique activations', unique_bin_acts)
+    print('num_unique_activations', len(unique_bin_acts))
+    if (legend_flag):
+        plt.legend()
+
+
+
+##########################################################################
+#                                                                        #
+#                            Misc. Utilities                             #
+#                                                                        #
+##########################################################################
+
+
+def _newax(ax=None):
+    """Add subplot to current figure and return axes."""
+    from matplotlib import pyplot as plt
+    if ax is not None:
+        return ax
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    return ax
+
+def _get_patch(poly1, **kwargs):
+    """Return matplotlib patch for given Polytope.
+
+    Example::
+
+    > # Plot Polytope objects poly1 and poly2 in the same plot
+    > import matplotlib.pyplot as plt
+    > fig = plt.figure()
+    > ax = fig.add_subplot(111)
+    > p1 = _get_patch(poly1, color="blue")
+    > p2 = _get_patch(poly2, color="yellow")
+    > ax.add_patch(p1)
+    > ax.add_patch(p2)
+    > ax.set_xlim(xl, xu) # Optional: set axis max/min
+    > ax.set_ylim(yl, yu)
+    > plt.show()
+
+    @type poly1: L{Polytope}
+    @param kwargs: any keyword arguments valid for
+        matplotlib.patches.Polygon
+    """
+    import matplotlib as mpl
+    V = ptope.extreme(poly1)
+    rc, xc = ptope.cheby_ball(poly1)
+    x = V[:, 1] - xc[1]
+    y = V[:, 0] - xc[0]
+    mult = np.sqrt(x**2 + y**2)
+    x = x / mult
+    angle = np.arccos(x)
+    corr = np.ones(y.size) - 2 * (y < 0)
+    angle = angle * corr
+    ind = np.argsort(angle)
+    # create patch
+    patch = mpl.patches.Polygon(V[ind, :], True, **kwargs)
+    patch.set_zorder(0)
+    return patch
 
