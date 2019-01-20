@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from polytope import Polytope, Face
+from _polytope_ import Polytope, Face
 import utilities as utils
 
 

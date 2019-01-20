@@ -56,6 +56,8 @@ import numpy as np
 # ##########################################################################
 
 # test to see if code works for moderate number of glued polytopes
+# polytopes collected from a random sampling inside a box of size
+# (2*xylim) x (2*xylim) centered at the origin
 
 # ==================================
 # Gather Polytopes
@@ -64,11 +66,11 @@ import numpy as np
 print('===============Collecting Polytopes============')
 layer_sizes = [2, 8, 4, 1]
 network = PLNN(layer_sizes)
-num_pts = 100
+num_pts = 150
 xylim = 0.5
 
 unique_relu_configs_list, unique_bin_acts, _, _ = utils.get_unique_relu_configs(network, xylim, num_pts)
-print(len(unique_bin_acts))
+print('number of polytopes:', len(unique_bin_acts))
 color_dict = utils.get_color_dictionary(unique_bin_acts)
 polytope_list = []
 colors = []
@@ -86,7 +88,8 @@ for relu_configs, unique_act in zip(unique_relu_configs_list, unique_bin_acts):
 
 print('===============Finding Projection============')
 x_0 = np.asarray([[0.0], [0.0]])
-print('from: ', x_0)
+print('from point: ')
+print(x_0)
 
 t, boundary, unshared_facets = compute_l_inf_ball_batch(polytope_list, x_0, 'slow')
 print('the final projection value:', t)
