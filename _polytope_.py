@@ -34,7 +34,6 @@ class Polytope(object):
         num_constraints = self.ub_A.shape[0]
         facets = []
         for i in range(num_constraints):
-
             facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
             if check_feasible:
                 facet.check_feasible()
@@ -74,6 +73,8 @@ class Polytope(object):
 
 
 
+
+
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
         super(Face, self).__init__(poly_a, poly_b, config=config)
@@ -82,7 +83,6 @@ class Face(Polytope):
         self.a_eq = self.poly_a[tight_list]   # EDIT: self.a_eq = self.poly_a[tight_list]
         self.b_eq = self.poly_b[tight_list]
         self.tight_list = tight_list
-        self.config = config
         self.is_feasible = None
         self.is_facet = None
         self.interior = None

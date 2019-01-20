@@ -114,9 +114,9 @@ def incremental_geocert(plnn, x):
     """ Computes l_inf distance to decision boundary in
     """
 
+    true_label = int(net(x).max(1)[1].item()) # what the classifier outputs
     seen_to_polytope_map = {} # binary config str -> Polytope object
     seen_to_facet_map = {} # binary config str -> Facet list
-
     pq = [] # Priority queue that contains HeapElements
 
 
@@ -124,11 +124,12 @@ def incremental_geocert(plnn, x):
     #   Initialization phase: compute polytope containing x                   #
     ###########################################################################
 
-    p_0_dict = plnn.compute_polytope(x)
+    p_0_dict = net.compute_polytope(x)
     p_0 = from_polytope_dict(p_0_dict)
     p_0_facets = p_0.generate_facets(check_feasible=True)
     p_0_config = utils.flatten_config(p_0_dict['config'])
-
+    p_0_adv_constraints = net.make_adversarial_constraints(p_0_dict['config'],
+                                                           true_label)
     seen_to_polytope_map[p_0_config] = p_0
     seen_to_facet_map[p_0_config] = p_0_facets
     for facet in p_0_facets:
@@ -136,6 +137,12 @@ def incremental_geocert(plnn, x):
         heap_el = HeapElement(linf_dist, facet, decision_bound=False,
                               exact_or_estimate='exact')
         heapq.heappush(pq, heap_el)
+
+    for facet in p_0_adv_constraints:
+        linf_dist = facet.linf_dist(x)
+        heap_el = HeapElement(linf_dist, facet, decision_bound=True,
+                              exact_or_estimate='exact')
+
 
     # ADD ADVERSARIAL CONFIGS
     ##########################################################################
@@ -150,9 +157,9 @@ def incremental_geocert(plnn, x):
         new_heap_el = HeapElement(exact_linf, pop_el.facet,
                                   decision_bound=pop_el.decision_bound,
                                   exact_or_estimate='exact')
-        heapq.heappush
 
         # BROKEN BUT PUSHING ANYWAY
 
-
+    if pop_el.decision_bound:
+        return pop_el
 
