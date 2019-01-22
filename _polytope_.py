@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
+from cvxopt import matrix, solvers
 
 ##########################################################################
 #                                                                        #
@@ -41,6 +42,50 @@ class Polytope(object):
 
             if facet.is_facet:
                 facets.append(facet)
+
+        return facets
+
+    def generate_facets_configs(self, seen_polytopes_dict, check_feasible=False):
+        """ Generates all (n-1) dimensional facets of polytope which aren't
+            shared with other polytopes in list. (for ReLu nets)
+        """
+
+        num_constraints = self.ub_A.shape[0]
+        facets = []
+        for i in range(num_constraints):
+            facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
+            if check_feasible:
+                facet.check_feasible()
+            facet.check_facet()
+
+            #TODO: fix this code section below (no need to add already seen facets)
+
+            # # Don't add facets which are connected to seen polytopes (don't want to add facet twice)
+            # configs_flat = utils.flatten_config(facet.config)
+            # close_seen_bools = [utils.string_hamming_distance(configs_flat, other_config_flat) == 1
+            #               for other_config_flat in seen_polytopes_dict ]
+            #
+            # shared_facet_bools = [facet.tight_list[0] == utils.hamming_indices(configs_flat, other_config_flat)[0]
+            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
+            #                        if seen_bool]
+            # print('------')
+            # print([facet.tight_list[0]
+            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
+            #                        if seen_bool])
+            # print([utils.hamming_indices(configs_flat, other_config_flat)[0]
+            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
+            #                        if seen_bool])
+            # print('------')
+            # if facet.is_facet and not any(shared_facet_bools):
+
+            if facet.is_facet:
+                facets.append(facet)
+
+            # else:
+            #     if(facet.is_facet):
+            #         print('shared facet!')
+            #     else:
+            #         print('not a facet')
 
         return facets
 
@@ -145,11 +190,11 @@ class Face(Polytope):
                                      b_eq=self.b_eq,
                                      bounds=bounds, method='interior-point')
 
-
         if (linprog_result.status == 0 and
             linprog_result.fun < 0):
             self.is_facet = True
-            self.interior = linprog_result.x
+            self.interior = linprog_result.x[0:-1]
+
         elif linprog_result == 3:
             print('error, unbounded, in linprog for check facet')
 
@@ -173,6 +218,24 @@ class Face(Polytope):
         other_b = other.poly_b[other_tight]
 
         return utils.is_same_hyperplane(self_a, self_b, other_a, other_b)
+
+    def _same_tight_constraint(self, other):
+        """ Given two facets, checks if their tight constraints are the same
+            Returns True if they are the same
+        """
+        # if either is not a facet, then return False
+        if not (self.check_facet() and other.check_facet()):
+            return False
+        # if they lie in different hyperplanes, then return False
+        self_tight = self.tight_list[0]
+        self_a = self.poly_a[self_tight, :]
+        self_b = self.poly_b[self_tight]
+
+        other_tight = other.tight_list[0]
+        other_a = other.poly_a[other_tight, :]
+        other_b = other.poly_b[other_tight]
+
+        return utils.is_same_tight_constraint(self_a, self_b, other_a, other_b)
 
 
 
@@ -203,6 +266,14 @@ class Face(Polytope):
 
             Method uses PyPi library 'polytope' to compare
         """
+
+        # if either is not a facet, then return False
+        if not (self.check_facet() and other.check_facet()):
+            return False
+
+        if not self._same_hyperplane(other):
+            return False
+
         P1 = utils.Polytope_2(self.ub_A, self.ub_b)
         P2 = utils.Polytope_2(other.ub_A, other.ub_b)
 
@@ -210,39 +281,50 @@ class Face(Polytope):
         V2 = utils.ptope.extreme(P2)
 
         V1_ = []
-        for vertex in V1:
-            flag = utils.fuzzy_equal(np.matmul(self.a_eq, vertex), self.b_eq)
-            if flag:
-                V1_.append(vertex)
 
-        V2_ = []
-        for vertex in V2:
-            flag = utils.fuzzy_equal(np.matmul(other.a_eq, vertex), other.b_eq)
-            if flag:
-                V2_.append(vertex)
+        if(V1 is not None and V2 is not None):
+            for vertex in V1:
+                flag = utils.fuzzy_equal(np.matmul(self.a_eq, vertex), self.b_eq)
+                if flag:
+                    V1_.append(vertex)
 
-        if len(V1_) == len(V2_):
+            V2_ = []
+            for vertex in V2:
+                flag = utils.fuzzy_equal(np.matmul(other.a_eq, vertex), other.b_eq)
+                if flag:
+                    V2_.append(vertex)
 
-            flags = []
-            for vertex in V1_:
-                flags_2 = []
-                for vertex_2 in V2_:
-                    if np.allclose(vertex, vertex_2, atol=1e-6):
-                        flags_2.append(True)
-                    else:
-                        flags_2.append(False)
-                flags.append(any(flags_2))
+            if len(V1_) == len(V2_):
 
-            return all(flags)
+                flags = []
+                for vertex in V1_:
+                    flags_2 = []
+                    for vertex_2 in V2_:
+                        if np.allclose(vertex, vertex_2, atol=1e-6):
+                            flags_2.append(True)
+                        else:
+                            flags_2.append(False)
+                    flags.append(any(flags_2))
 
+                return all(flags)
+
+            else:
+                return False
         else:
-            return False
+            return  False
 
     def check_same_facet_config(self, other):
+        #TODO: fix numerical issues (shared facets aren't being eliminated)
+
         """ Potentially faster technique to check facets are the same
             The belief here is that if both (self, other) are facets, with their
             neuron configs specified, then if they have the same hyperplane and
             have config hamming distance 1, then they are the same facet
+
+            must account for the case where each polytope can be simulatenously
+            glued (not perfectly glued) to more than one hyperplane. two
+            faces can come from polytopes with ReLu hamming distance one
+            and yet their intersection is not a (n-1) dim. face
         """
         if not (self.check_facet() and other.check_facet()):
             return False
@@ -253,10 +335,15 @@ class Face(Polytope):
         if self.config is None or other.config is None:
             return self.check_same_facet_pg(other)
 
-        return utils.config_hamming_distance(self.config, other.config) == 1
+        ReLu_distance_check = (utils.config_hamming_distance(self.config, other.config) == 1)
+
+        return ReLu_distance_check and not self._same_tight_constraint(other)
+
 
 
     def linf_dist(self, x):
+        #TODO: this method doesn't always correctly find the projection onto a facet
+
         """ Returns the l_inf distance to point x """
 
         # set up the linear program
@@ -306,6 +393,31 @@ class Face(Polytope):
             return linprog_result.fun
         else:
             raise Exception("LINPROG FAILED: " + linprog_result.message)
+
+
+    def l2_dist(self, x):
+        # set up the quadratic program
+        # min_{v} v^T*v
+        # s.t.
+        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
+        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
+
+        n = np.shape(x)[0]
+        P = matrix(np.identity(n))
+        G = matrix(self.poly_a)
+        h = matrix(self.poly_b - np.matmul(self.poly_a, x)[:, 0])
+        q = matrix(np.zeros([n, 1]))
+        A = matrix(self.a_eq)
+        b = matrix(self.b_eq - np.matmul(self.a_eq, x))
+
+        quad_program_result = solvers.qp(P, q, G, h, A, b)
+
+        if quad_program_result['status'] == 'optimal':
+            x = np.array(quad_program_result['x'])
+            return np.linalg.norm(x)
+        else:
+            raise Exception("QPPROG FAILED: " + quad_program_result.status)
+
 
 
     def get_inequality_constraints(self):

@@ -1,0 +1,75 @@
+<?xml version="1.1" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+    xmlns:latexdraw="http://latexdraw.sourceforge.net/namespaces/latexdraw"
+    version="1.1" baseProfile="full">
+    <g>
+        <g latexdraw:type="joinedLines" id="id502841923">
+            <polyline
+                points="130.51843803647245,400.6234731587334 23.295459028526807,229.54732591061267 120.46251508658523,80.49265437237766 339.1448262500519,30.567561589439492 414.7478686532708,248.41476369051006 295.9610968148554,431.14254436308494 129.54542700067088,400.2997786042665 "
+                stroke-width="2.0" stroke="black" fill="none" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="dot" id="id1764302867"
+            latexdraw:size="20.000000000000018" latexdraw:dotShape="*" latexdraw:position="249.0666666666665 234.9538461538457">
+            <path
+                d="M 258.2974358974357 234.9538461538457 C 258.2974358974357 240.05185922920688 254.1646797420277 244.18461538461494 249.0666666666665 244.18461538461494 C 243.96865359130533 244.18461538461494 239.83589743589727 240.05185922920688 239.83589743589727 234.9538461538457 C 239.83589743589727 229.85583307848452 243.96865359130533 225.72307692307646 249.0666666666665 225.72307692307646 C 254.1646797420277 225.72307692307646 258.2974358974357 229.85583307848452 258.2974358974357 234.9538461538457 z "
+                fill="#6b6b6b" stroke-linecap="square"
+                stroke-linejoin="butt" stroke-width="1.25"
+                stroke-miterlimit="10.0" stroke-dashoffset="0.0" stroke="#6b6b6b"/>
+        </g>
+        <g latexdraw:type="square" id="id1870577031">
+            <rect x="180.83589743589724" y="166.210256410256"
+                width="137.4871794871793" height="137.4871794871793"
+                latexdraw:borderPos="outer" stroke-width="2.0"
+                stroke="#6b6b6b" fill="none" stroke-dasharray="8.819444444444445, 5.291666666666667"/>
+        </g>
+        <g latexdraw:type="square" id="id325316407">
+            <rect x="144.92564102564097" y="129.78717948717923"
+                width="209.30769230769187" height="209.30769230769187"
+                latexdraw:borderPos="outer" stroke-width="3.0"
+                stroke="#6b6b6b" fill="none"/>
+        </g>
+        <g latexdraw:type="joinedLines" id="id592322347">
+            <polyline
+                points="356.2888888888892,339.91111111111087 247.95555555555546,235.46666666666633 "
+                stroke-width="2.0" stroke="black"
+                latexdraw:rotationAngle="0.0" marker-start="url(#arrow0-592322347)"/>
+        </g>
+        <g latexdraw:type="text" id="id1333703579" fill="black" latexdraw:position="bl">
+            <text x="115.20000000000005" y="57.60000000000025">$Ax \leq b$</text>
+        </g>
+        <g latexdraw:type="text" id="id2089004143" fill="black" latexdraw:position="bl">
+            <text x="227.19999999999993" y="112.80000000000018">$\{ x  \, | \, \| x\|_{\infty} \leq t^{*}  \}$</text>
+        </g>
+        <g latexdraw:type="text" id="id324123992" fill="black" latexdraw:position="bl">
+            <text x="255.20000000000005" y="216.79999999999995">$x_0$</text>
+        </g>
+    </g>
+    <defs>
+        <marker overflow="visible" orient="auto" id="arrow0-592322347">
+            <path
+                d="M 0.0 0.0 L 4.652083333333334 1.6614583333333335 L 4.652083333333334 0.0 L 4.652083333333334 -1.6614583333333335 z "
+                latexdraw:arrSizeNum="2.0" fill="black"/>
+        </marker>
+    </defs>
+    <metadata>
+        <latexdraw:metadata>
+            <latexdraw:latexIncludes/>
+            <latexdraw:displayXScale>true</latexdraw:displayXScale>
+            <latexdraw:displayYScale>true</latexdraw:displayYScale>
+            <latexdraw:unit>CM</latexdraw:unit>
+            <latexdraw:zoom>1.2500000000000002</latexdraw:zoom>
+            <latexdraw:magneticGridStyle>NONE</latexdraw:magneticGridStyle>
+            <latexdraw:gridGap>20</latexdraw:gridGap>
+            <latexdraw:magneticGrid>false</latexdraw:magneticGrid>
+            <latexdraw:version>3.3.8</latexdraw:version>
+            <latexdraw:size>
+                <latexdraw:width>1248</latexdraw:width>
+                <latexdraw:height>1388</latexdraw:height>
+            </latexdraw:size>
+            <latexdraw:position>
+                <latexdraw:x>1312.0</latexdraw:x>
+                <latexdraw:y>52.0</latexdraw:y>
+            </latexdraw:position>
+        </latexdraw:metadata>
+    </metadata>
+</svg>

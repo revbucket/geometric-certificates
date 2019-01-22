@@ -20,8 +20,21 @@ def config_hamming_distance(config1, config2):
     hamming_dist = 0
     for comp1, comp2 in zip(config1, config2):
         uneqs = comp1.type(torch.uint8) != comp2.type(torch.uint8)
-        hamming_dist += uneqs.sum()
+        hamming_dist += uneqs.sum().numpy()
     return hamming_dist
+
+def string_hamming_distance(str1, str2):
+    assert len(str1) == len(str2)
+    dist = sum(c1 != c2 for c1, c2 in zip(str1, str2))
+    return dist
+
+def hamming_indices(str1, str2):
+    assert len(str1) == len(str2)
+    # list = [c1 != c2 for c1, c2 in zip(str1, str2)]
+    # index = list.index(True)
+    indices = [index for index, (c1, c2) in enumerate(zip(str1, str2)) if c1 != c2]
+
+    return indices
 
 
 def flatten_config(config):
@@ -40,8 +53,9 @@ def flatten_config(config):
 #                                                                            #
 ##############################################################################
 
+global_tolerance = 1e-4
 
-def comparison_form(A, b, tolerance=1e-8):
+def comparison_form(A, b, tolerance=global_tolerance):
     """ Given polytope Ax<= b
         Convert each constraint into a_i^Tx <= +-1, 0
         If b_i=0, normalize a_i
@@ -78,21 +92,21 @@ def comparison_form(A, b, tolerance=1e-8):
     return sorted_a, sorted_b
 
 
-def fuzzy_equal(x, y, tolerance=1e-8):
+def fuzzy_equal(x, y, tolerance=global_tolerance):
     """ Fuzzy float equality check. Returns true if x,y are within tolerance
         x, y are scalars
     """
     return abs(x - y) < tolerance
 
 
-def fuzzy_vector_equal(x_vec, y_vec, tolerance=1e-8):
+def fuzzy_vector_equal(x_vec, y_vec, tolerance=global_tolerance):
     """ Same as above, but for vectors.
         x_vec, y_vec are 1d numpy arrays
      """
     return all(abs(el) < tolerance for el in x_vec - y_vec)
 
 
-def is_same_hyperplane(a1, b1, a2, b2, tolerance=1e-8):
+def is_same_hyperplane(a1, b1, a2, b2, tolerance=global_tolerance):
     """ Given two hyperplanes of the form <a1, x> =b1, <a2, x> =b2
         this returns true if the two define the same hyperplane.
 
@@ -119,6 +133,36 @@ def is_same_hyperplane(a1, b1, a2, b2, tolerance=1e-8):
 
     # if b's are different signs, then a1/b1 ~ a2/b2
     return fuzzy_vector_equal(a1 / b1, a2 / b2, tolerance=tolerance)
+
+
+def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
+    """ Given tight constraint of the form <a1, x> <=b1, <a2, x> <=b2
+        this returns true if the two define the same tight constraint.
+
+        Only works if these two are in 'comparison form'
+    """
+    # assert that we're in comparison form
+    # --- check hyperplane 1 first
+    for (a, b) in [(a1, b1), (a2, b2)]:
+        if abs(b) < tolerance: # b ~ 0, then ||a|| ~ 1
+            assert fuzzy_equal(np.linalg.norm(a), 1, tolerance=tolerance)
+        else:
+            # otherwise abs(b) ~ 1
+            assert fuzzy_equal(abs(b), 1.0, tolerance=tolerance)
+
+    # First check that b1, b2 are either +-1, or 0
+    if not fuzzy_equal(abs(b1), abs(b2), tolerance=tolerance):
+        return False
+
+    # if b's are zero, then vectors need to be equal up to -1 factor
+    if fuzzy_equal(b1, 0, tolerance=tolerance):
+        return (fuzzy_vector_equal(a1, a2, tolerance=tolerance) or
+                fuzzy_vector_equal(a1, -a2, tolerance=tolerance))
+
+
+    # check if a1 approx = a2 and b1 approx = b2
+    return fuzzy_vector_equal(a1, a2, tolerance=tolerance) and fuzzy_equal(b1, b2, tolerance=tolerance)
+
 
 
 ##########################################################################
@@ -157,6 +201,7 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
             P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
 
         else:
+            # TODO: add extra constraints to plot unbounded polytopes
             print('a polytope was not plotted')
 
     plt.xlim(-xylim, xylim)
@@ -173,7 +218,8 @@ def plot_facets_2d(facet_list, alpha=1.0,
         vertices = ptope.extreme(P)
 
         facet_vertices = []
-        if vertices is not None:
+
+        if vertices is not None and np.shape(vertices)[0] > 1:
             for vertex in vertices:
                 equal = fuzzy_equal(np.dot(facet.a_eq[0], vertex), facet.b_eq[0])
                 if equal:
@@ -183,7 +229,6 @@ def plot_facets_2d(facet_list, alpha=1.0,
             x = [x1, x2]; y = [y1, y2]
 
             ax.plot(x, y, c=color, linestyle=linestyle, linewidth=linewidth)
-
     plt.xlim(-xylim, xylim)
     plt.ylim(-xylim, xylim)
 
@@ -193,6 +238,12 @@ def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
+
+def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
+    """Plots l2 norm ball of size t centered at x_0 (only in R^2)
+    """
+    circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
+    ax.add_artist(circle)
 
 
 def get_spaced_colors(n):
@@ -208,6 +259,7 @@ def get_spaced_colors(n):
 def get_color_dictionary(list):
     """Creates a dictionary of evenly spaced colors, keys are elements in provided lists
     """
+
     n = len(list)
     colors = get_spaced_colors(n)
     color_dict = {}
@@ -263,7 +315,7 @@ def binarize_relu_configs( relu_configs):
     return bin_code
 
 def get_unique_relu_configs(network, xylim, numpts):
-    """ Samples within a square of size (2*xylim) x (2*xylim), and returns the unique
+    """ Samples within a square of size (xylim) x (xylim), and returns the unique
         ReLu activations. Total number of samples is numpts^2
 
         Returns: unique relu_configs    =>  (list of arrays of unique ReLu acts)
@@ -276,8 +328,8 @@ def get_unique_relu_configs(network, xylim, numpts):
     relu_configs_list = []
     xs = []
 
-    for x in np.linspace(-xylim, xylim, numpts):
-        for y in np.linspace(-xylim, xylim, numpts):
+    for x in np.linspace(-0, xylim, numpts):
+        for y in np.linspace(-0, xylim, numpts):
             pt_0 = torch.Tensor([x, y]).type(torch.float32)
             relu_configs = network.relu_config(pt_0, False)
             bin_code = binarize_relu_configs(relu_configs)
@@ -299,7 +351,7 @@ def get_unique_relu_configs(network, xylim, numpts):
 
 def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
     """ Roughly plots polytopes in 2d for given network. Samples within a square of size
-        (2*xylim) x (2*xylim), and plots an identifying color for each unique ReLu configuration.
+        (xylim) x (xylim), and plots an identifying color for each unique ReLu configuration.
         Total number of samples is numpts^2
     """
     _, unique_bin_acts, xs, num_activations = get_unique_relu_configs(network, xylim, numpts)
@@ -313,7 +365,6 @@ def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
         colors = [color_dict[unique_act] for _ in range(0, len(x_pts_to_plot))]
         plt.scatter(x_pts_to_plot, y_pts_to_plot, label=str(unique_act), c=colors)
 
-    # print('unique activations', unique_bin_acts)
     print('num_unique_activations', len(unique_bin_acts))
     if (legend_flag):
         plt.legend()
@@ -359,17 +410,23 @@ def _get_patch(poly1, **kwargs):
     """
     import matplotlib as mpl
     V = ptope.extreme(poly1)
-    rc, xc = ptope.cheby_ball(poly1)
-    x = V[:, 1] - xc[1]
-    y = V[:, 0] - xc[0]
-    mult = np.sqrt(x**2 + y**2)
-    x = x / mult
-    angle = np.arccos(x)
-    corr = np.ones(y.size) - 2 * (y < 0)
-    angle = angle * corr
-    ind = np.argsort(angle)
-    # create patch
-    patch = mpl.patches.Polygon(V[ind, :], True, **kwargs)
-    patch.set_zorder(0)
+
+    if (V is not None):
+        rc, xc = ptope.cheby_ball(poly1)
+        x = V[:, 1] - xc[1]
+        y = V[:, 0] - xc[0]
+        mult = np.sqrt(x**2 + y**2)
+        x = x / mult
+        angle = np.arccos(x)
+        corr = np.ones(y.size) - 2 * (y < 0)
+        angle = angle * corr
+        ind = np.argsort(angle)
+        # create patch
+        patch = mpl.patches.Polygon(V[ind, :], True, **kwargs)
+        patch.set_zorder(0)
+
+    else:
+        patch = mpl.patches.Polygon([], True, **kwargs)
+        patch.set_zorder(0)
     return patch
 
