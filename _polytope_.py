@@ -412,11 +412,12 @@ class Face(Polytope):
 
         quad_program_result = solvers.qp(P, q, G, h, A, b)
 
-        if quad_program_result['status'] == 'optimal':
+        if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
             x = np.array(quad_program_result['x'])
             return np.linalg.norm(x)
         else:
-            raise Exception("QPPROG FAILED: " + quad_program_result.status)
+            print(quad_program_result)
+            raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
 
 

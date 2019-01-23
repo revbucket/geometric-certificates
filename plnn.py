@@ -29,7 +29,7 @@ class PLNN(nn.Module):
         num = 1
         for size_pair in zip(layer_sizes, layer_sizes[1:]):
             size, next_size = size_pair
-            layer = nn.Linear(size, next_size, bias=True)
+            layer = nn.Linear(size, next_size, bias=True).type(self.dtype)
             layers[str(num)] = layer
             self.fcs.append(layer)
             num = num + 1

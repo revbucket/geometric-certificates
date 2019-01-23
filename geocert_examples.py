@@ -18,13 +18,13 @@ from convex_adversarial import robust_loss
 
 
 
-# ##########################################################################
-# #                                                                        #
-# #                             Test 1                                     #
-# #                                                                        #
-# ##########################################################################
+# # ##########################################################################
+# # #                                                                        #
+# # #                          Example 1                                     #
+# # #                                                                        #
+# # ##########################################################################
 #
-# # test to see if code works for simple union of glued polytopes
+# # run batch 'GeoCert' method on a collection of simple perfectly glued polytopes
 #
 # # =====================
 # # Create Polytopes
@@ -55,16 +55,17 @@ from convex_adversarial import robust_loss
 
 
 
-
 # ##########################################################################
 # #                                                                        #
-# #                             Test 2                                     #
+# #                             Example 2                                  #
 # #                                                                        #
 # ##########################################################################
 #
-# # test to see if code works for moderate number of glued polytopes
-# # polytopes collected from a random sampling inside a box of size
-# # (2*xylim) x (2*xylim) centered at the origin
+# # run batch 'GeoCert' on a moderate number of perfectly glued polytopes.
+# # polytopes generated from the collection of perfectly glued polytopes
+# # defined by the ReLu configurations of a network with Gaussian random weights.
+# # unique ReLu configs gathered by uniform sampling of (2*xylim)x(2*xylim) box
+# # centered at the origin
 #
 # # ==================================
 # # Gather Polytopes
@@ -129,11 +130,13 @@ from convex_adversarial import robust_loss
 
 # # ##########################################################################
 # # #                                                                        #
-# # #                             Test 3                                     #
+# # #                          Example 3                                     #
 # # #                                                                        #
 # # ##########################################################################
 #
-# # test to see if incremental code works
+# # run incremental 'GeoCert' from the point [0,0]. Network is simple ReLu net with
+# # Gaussian random weights. Finds maximal l_p ball within which the class label
+# # remains the same.
 #
 #
 # # ==================================
@@ -148,7 +151,10 @@ from convex_adversarial import robust_loss
 # # Find Projection
 # # ==================================
 #
+# lp_norm = 'l_2'
+#
 # print('===============Finding Projection============')
+# print('lp_norm: ', lp_norm)
 # x_0 = torch.Tensor([[0.0], [0.0]])
 # print('from point: ')
 # print(x_0)
@@ -158,18 +164,19 @@ from convex_adversarial import robust_loss
 # print(cwd)
 # plot_dir = cwd + '/plots/incremental_geocert/'
 #
-# t = incremental_geocert(network, x_0, ax, plot_dir)
+# t = incremental_geocert(lp_norm, network, x_0, ax, plot_dir)
 #
 # print('the final projection value:', t)
 
 
 # # ##########################################################################
 # # #                                                                        #
-# # #                             Test 4                                     #
+# # #                          Example 4                                     #
 # # #                                                                        #
 # # ##########################################################################
 #
-# # test applying incremental geocert to a robust classifier
+# # apply incremental geocert to a robust classifier. Finds maximal l_p balls
+# # for random points in R^2.
 #
 # # ==================================
 # # Generate Training Points
@@ -251,8 +258,6 @@ from convex_adversarial import robust_loss
 # ax.axis("equal")
 # ax.axis([0, 1, 0, 1])
 #
-# for pt in x:
-#     utils.plot_linf_norm(pt, r/2.0, ax=ax)
 # plt.show()
 #
 # # ==================================
@@ -291,7 +296,7 @@ from convex_adversarial import robust_loss
 #
 #
 # # ------------------------------
-# # Plot Polytopes, boundary, and linf norm
+# # Plot Polytopes, boundary, and lp norm
 # # ------------------------------
 #
 # ax = plt.gca()
@@ -309,11 +314,13 @@ from convex_adversarial import robust_loss
 # # Find Projections
 # # ==================================
 #
+# lp_norm = 'l_2'
 # ts = []
 # pts = x
 #
 # for pt in pts:
 #     print('===============Finding Projection============')
+#     print('lp_norm: ', lp_norm)
 #     x_0 = torch.Tensor(pt.reshape([2, 1]))
 #     print(x_0)
 #     print('from point: ')
@@ -324,7 +331,7 @@ from convex_adversarial import robust_loss
 #     print(cwd)
 #     plot_dir = cwd + '/plots/incremental_geocert/'
 #
-#     t = incremental_geocert(network, x_0, ax, plot_dir)
+#     t = incremental_geocert(lp_norm, network, x_0, ax, plot_dir)
 #
 #     print('the final projection value:', t)
 #     ts.append(t)
@@ -345,7 +352,12 @@ from convex_adversarial import robust_loss
 # ax.axis([0, 1, 0, 1])
 #
 # for pt, t, y in zip(pts, ts, y.numpy()):
-#     utils.plot_linf_norm(pt, t, ax=ax)
+#     if lp_norm == 'l_2':
+#         utils.plot_l2_norm(pt, t, ax=ax)
+#     elif lp_norm == 'l_inf':
+#         utils.plot_linf_norm(pt, t, ax=ax)
+#     else:
+#         raise NotImplementedError
 #
 # print('average_linf:', np.average(ts))
 #

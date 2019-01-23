@@ -201,8 +201,14 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
             P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
 
         else:
-            # TODO: add extra constraints to plot unbounded polytopes
-            print('a polytope was not plotted')
+            ax.autoscale()
+            xlims = ax.get_xlim()
+            ylims = ax.get_ylim()
+            new_ub_A = np.vstack((poly.ub_A, [[1,0],[-1,0],[0,1],[0,-1]]))
+            new_ub_b = np.hstack((poly.ub_b, [xlims[1], -1*xlims[0], ylims[1], -1*ylims[0]]))
+            P2 = Polytope_2(new_ub_A, new_ub_b)
+            P2.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
+            print('an unobunded polytope was plotted imperfectly')
 
     plt.xlim(-xylim, xylim)
     plt.ylim(-xylim, xylim)
@@ -324,28 +330,44 @@ def get_unique_relu_configs(network, xylim, numpts):
                  num_activations        =>  (list of unique numbers associated with Relu acts)
     """
 
+    if(np.size(xylim)==1):
+        xlim = [0, xylim]
+        ylim = [0, xylim]
+    else:
+        xlim = xylim[0]
+        ylim = xylim[1]
+
     num_activations = []
     relu_configs_list = []
     xs = []
 
-    for x in np.linspace(-0, xylim, numpts):
-        for y in np.linspace(-0, xylim, numpts):
+
+    for x in np.linspace(xlim[0], xlim[1], numpts):
+        for y in np.linspace(ylim[0], ylim[1], numpts):
             pt_0 = torch.Tensor([x, y]).type(torch.float32)
             relu_configs = network.relu_config(pt_0, False)
             bin_code = binarize_relu_configs(relu_configs)
             bin_list = np.ndarray.tolist(bin_code)
             num = BitArray(bin_list).uint
 
+            flag = False
+            for previous_num in num_activations:
+                if num == previous_num:
+                    flag = True
+                    continue
+
+            if flag == False:
+                num_activations.append(num)
+                relu_configs_list.append(relu_configs)
+
             xs.append(pt_0.data.numpy())
-            num_activations.append(num)
-            relu_configs_list.append(relu_configs)
 
-    unique_bin_acts = set(num_activations)
-    indices = [num_activations.index(unique_bin_act) for unique_bin_act in unique_bin_acts]
+    # unique_bin_acts = set(num_activations)
+    # indices = [num_activations.index(unique_bin_act) for unique_bin_act in unique_bin_acts]
+    #
+    # unique_relu_configs_list = [relu_configs_list[index] for index in indices]
 
-    unique_relu_configs_list = [relu_configs_list[index] for index in indices]
-
-    return unique_relu_configs_list, unique_bin_acts, xs, num_activations
+    return relu_configs_list, num_activations, xs, num_activations
 
 
 

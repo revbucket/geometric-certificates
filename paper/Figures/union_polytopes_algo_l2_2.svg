@@ -1,0 +1,71 @@
+<?xml version="1.1" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+    xmlns:latexdraw="http://latexdraw.sourceforge.net/namespaces/latexdraw"
+    version="1.1" baseProfile="full">
+    <g>
+        <g latexdraw:type="polygon" id="id1611767074">
+            <polygon
+                points="890.1591048493533,314.7064409966524 712.0564714995901,402.520857422493 570.8862538325482,287.0987589263324 611.1067920132432,148.86926999426214 800.0208460841774,83.81609179187672 897.8893498544186,178.03445479937272 "
+                stroke-width="3.5" stroke="black" fill="#dcdcdc"
+                stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="polygon" id="id1006290525">
+            <polygon
+                points="746.3544363066385,385.8697912613211 559.7711716223286,279.33743366291833 395.92198708979157,333.14299131305324 380.3422838094194,489.4387084226962 517.0932946414026,622.8186324669291 701.8949809605385,545.0927049159127 "
+                stroke-width="3.5" stroke="black" fill="#dcdcdc"
+                stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="polygon" id="id356050533">
+            <polygon
+                points="400.0626263091017,354.08002994944854 254.03289302419392,186.81760418125862 69.96549776305665,259.58671866909935 20.473879969881153,417.3856763482927 141.28007712791265,565.3617076162939 382.95026623301766,490.26754653603257 "
+                stroke-width="3.5" stroke="black" fill="#dcdcdc"
+                stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="polygon" id="id1743778934">
+            <polygon
+                points="572.6215857921977,286.66766659867494 398.9593382035979,352.85965508532877 252.52964350689206,186.13901180472817 352.642840558814,38.789358374565836 561.0926387889465,24.056055156782577 625.7269778922799,143.54557840762197 "
+                stroke-width="3.5" stroke="black" fill="#dcdcdc"
+                stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="dot" id="id685809148" latexdraw:size="20.0"
+            latexdraw:dotShape="*" latexdraw:position="396.95970695970675 280.73260073260053">
+            <path
+                d="M 406.190476190476 280.73260073260053 C 406.190476190476 285.8306138079617 402.0577200350679 289.96336996336976 396.95970695970675 289.96336996336976 C 391.8616938843456 289.96336996336976 387.7289377289375 285.8306138079617 387.7289377289375 280.73260073260053 C 387.7289377289375 275.63458765723936 391.8616938843456 271.5018315018313 396.95970695970675 271.5018315018313 C 402.0577200350679 271.5018315018313 406.190476190476 275.63458765723936 406.190476190476 280.73260073260053 z "
+                fill="black" stroke-linecap="square"
+                stroke-linejoin="butt" stroke-width="1.25"
+                stroke-miterlimit="10.0" stroke-dashoffset="0.0" stroke="black"/>
+        </g>
+        <g latexdraw:type="joinedLines" id="id1790885168">
+            <polyline
+                points="353.71040723981855,38.68778280542938 251.357466063348,185.7466063348411 70.76923076923043,259.27601809954695 20.18099547511281,416.33484162895866 140.18099547511275,565.1583710407233 382.53393665158325,490.4524886877821 400.18099547511264,352.2171945701351 573.7104072398184,286.33484162895866 626.6515837104067,141.62895927601755 560.1809954751126,23.981900452488162 351.9457013574656,39.27601809954706 "
+                stroke-width="6.0" stroke="#ff4242" fill="none" latexdraw:rotationAngle="0.0"/>
+        </g>
+        <g latexdraw:type="circle" id="id1576311431">
+            <circle cx="397.3333333333333" cy="280.8888888888889"
+                r="62.63888888888886" latexdraw:borderPos="outer"
+                stroke-width="4.5" stroke="black" fill="none"/>
+        </g>
+    </g>
+    <defs/>
+    <metadata>
+        <latexdraw:metadata>
+            <latexdraw:latexIncludes/>
+            <latexdraw:displayXScale>true</latexdraw:displayXScale>
+            <latexdraw:displayYScale>true</latexdraw:displayYScale>
+            <latexdraw:unit>CM</latexdraw:unit>
+            <latexdraw:zoom>1.8000000000000007</latexdraw:zoom>
+            <latexdraw:magneticGridStyle>NONE</latexdraw:magneticGridStyle>
+            <latexdraw:gridGap>20</latexdraw:gridGap>
+            <latexdraw:magneticGrid>false</latexdraw:magneticGrid>
+            <latexdraw:version>3.3.8</latexdraw:version>
+            <latexdraw:size>
+                <latexdraw:width>2495</latexdraw:width>
+                <latexdraw:height>1416</latexdraw:height>
+            </latexdraw:size>
+            <latexdraw:position>
+                <latexdraw:x>1312.0</latexdraw:x>
+                <latexdraw:y>52.0</latexdraw:y>
+            </latexdraw:position>
+        </latexdraw:metadata>
+    </metadata>
+</svg>

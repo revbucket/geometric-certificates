@@ -116,21 +116,23 @@ class HeapElement(object):
     """ Wrapper of the element to be pushed around the priority queue
         in the incremental algorithm
     """
-    def __init__(self, linf_dist, facet,
+    def __init__(self, lp_dist, facet,
                  decision_bound=False,
                  exact_or_estimate='exact'):
-        self.linf_dist = linf_dist
+        self.lp_dist = lp_dist
         self.facet = facet
         self.decision_bound = decision_bound
         self.exact_or_estimate = exact_or_estimate
 
     def __lt__(self, other):
-        return self.linf_dist < other.linf_dist
+        return self.lp_dist < other.lp_dist
 
 
-def incremental_geocert(net, x, ax, plot_dir, n_colors=200):
+def incremental_geocert(lp_norm, net, x, ax, plot_dir, n_colors=200):
     """ Computes l_inf distance to decision boundary in incremental steps of
         expanding the search space
+
+        lp_norm: options include    =>  {'l_2' | 'l_inf'}
     """
     true_label = int(net(x).max(1)[1].item()) # what the classifier outputs
     seen_to_polytope_map = {} # binary config str -> Polytope object
@@ -144,8 +146,9 @@ def incremental_geocert(net, x, ax, plot_dir, n_colors=200):
     print('---Initial Polytope---')
     p_0_dict = net.compute_polytope(x, True)
     p_0 = from_polytope_dict(p_0_dict)
-    geocert_update_step(net, x, p_0, None, pq, true_label,
+    geocert_update_step(lp_norm, net, x, p_0, None, pq, true_label,
                         seen_to_polytope_map, seen_to_facet_map)
+
 
 
     ##########################################################################
@@ -153,14 +156,14 @@ def incremental_geocert(net, x, ax, plot_dir, n_colors=200):
     ##########################################################################
     index = 0
 
-    while index < 1000:
+    while True:
         # Pop a facet from the heap
         pop_el = heapq.heappop(pq)
 
         # If only an estimate, make it exact and push it back onto the heap
         if pop_el.exact_or_estimate == 'estimate':
-            exact_linf = pop_el.facet.linf_dist(x)
-            new_heap_el = HeapElement(exact_linf, pop_el.facet,
+            exact_lp_dist = pop_el.facet.lp_dist(x)
+            new_heap_el = HeapElement(exact_lp_dist, pop_el.facet,
                                       decision_bound=pop_el.decision_bound,
                                       exact_or_estimate='exact')
             heapq.heappush(pq, new_heap_el)
@@ -168,8 +171,9 @@ def incremental_geocert(net, x, ax, plot_dir, n_colors=200):
         # If popped element is part of the decision boundary then DONE
         if pop_el.decision_bound:
             print('----------Minimal Projection Generated----------')
-            geocert_plot_step(seen_to_polytope_map, pq, pop_el.linf_dist, x, plot_dir, n_colors, iter=index)
-            return pop_el.linf_dist
+            geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
+                              x, plot_dir, n_colors, iter=index)
+            return pop_el.lp_dist
 
         # Otherwise, find ReLu configuration on other side of the facet
         # and expand the search space
@@ -188,18 +192,19 @@ def incremental_geocert(net, x, ax, plot_dir, n_colors=200):
             if new_configs_flat not in seen_to_polytope_map:
                 new_polytope_dict = net.compute_polytope_config(new_configs, True)
                 new_polytope = from_polytope_dict(new_polytope_dict)
-                geocert_update_step(net, x, new_polytope, popped_facet, pq, true_label,
+                geocert_update_step(lp_norm, net, x, new_polytope, popped_facet, pq, true_label,
                                     seen_to_polytope_map, seen_to_facet_map)
 
             else:
                 print('weve already seen that polytope')
 
-        if(index % 1000 == 0 ):
-            geocert_plot_step(seen_to_polytope_map, pq, pop_el.linf_dist, x, plot_dir, n_colors, iter=index)
+        if(index % 10 == 0 ):
+            geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
+                              x, plot_dir, n_colors, iter=index)
         index = index + 1
 
 
-def geocert_update_step(net, x, polytope, popped_facet, pr_queue, true_label,
+def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_label,
                         seen_to_polytope_map, seen_to_facet_map):
     ''' Given next polytope from popped heap element: finds new polytope facets,
         pushes facets to the heap, and updates seen maps
@@ -215,26 +220,35 @@ def geocert_update_step(net, x, polytope, popped_facet, pr_queue, true_label,
     seen_to_facet_map[polytope_config] = polytope_facets
 
 
+
     for facet in polytope_facets:
         if popped_facet is not None:
             if not (popped_facet.check_same_facet_config(facet)):
                 # Only add to heap if new face isn't the popped facet
-                linf_dist = facet.linf_dist(x)
-                heap_el = HeapElement(linf_dist, facet, decision_bound=False,
+                lp_dist = get_lp_dist(lp_norm, facet, x)
+                heap_el = HeapElement(lp_dist, facet, decision_bound=False,
                                       exact_or_estimate='exact')
                 heapq.heappush(pr_queue, heap_el)
         else:
             # For first time use, popped facet doesn't exist
-            linf_dist = facet.linf_dist(x)
-            heap_el = HeapElement(linf_dist, facet, decision_bound=False,
+            lp_dist = get_lp_dist(lp_norm, facet, x)
+            heap_el = HeapElement(lp_dist, facet, decision_bound=False,
                                   exact_or_estimate='exact')
             heapq.heappush(pr_queue, heap_el)
 
     for facet in polytope_adv_constraints:
-        linf_dist = facet.linf_dist(x)
-        heap_el = HeapElement(linf_dist, facet, decision_bound=True,
+        lp_dist = get_lp_dist(lp_norm, facet, x)
+        heap_el = HeapElement(lp_dist, facet, decision_bound=True,
                               exact_or_estimate='exact')
         heapq.heappush(pr_queue, heap_el)
+
+def get_lp_dist(lp_norm, facet, x):
+    if lp_norm == 'l_2':
+        return facet.l2_dist(x)
+    elif lp_norm == 'l_inf':
+        return facet.linf_dist(x)
+    else:
+        raise NotImplementedError
 
 
 def get_new_configs(tight_boolean_configs, orig_configs):
@@ -257,9 +271,10 @@ def get_new_configs(tight_boolean_configs, orig_configs):
     return new_configs
 
 
-def geocert_plot_step(seen_to_polytope_map, facet_heap_elems, t, x, plot_dir, n_colors, ax =None, iter=0):
+def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
+                      t, x, plot_dir, n_colors, ax =None, iter=0):
     ''' Plots the current search boundary based on the heap, the seen polytopes,
-        the current minimal linf ball, and any classification boundary facets
+        the current minimal lp ball, and any classification boundary facets
     '''
     plt.figure(figsize=[10, 10])
     if ax is None:
@@ -279,17 +294,17 @@ def geocert_plot_step(seen_to_polytope_map, facet_heap_elems, t, x, plot_dir, n_
     utils.plot_facets_2d(boundary_facet_list, alpha=0.7,
                    xylim=5, ax=ax, linestyle='dashed', linewidth=3, color='red')
 
-    utils.plot_linf_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
-
-
+    if lp_norm == 'l_inf':
+        utils.plot_linf_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
+    elif lp_norm == 'l_2':
+        utils.plot_l2_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
+    else:
+        raise NotImplementedError
 
     plt.autoscale()
     filename = plot_dir + str(iter) + '.svg'
     plt.savefig(filename)
     plt.close()
-
-    import time
-    time.sleep(0.1)
 
 
 
