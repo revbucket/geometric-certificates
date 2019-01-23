@@ -201,14 +201,17 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
             P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
 
         else:
-            ax.autoscale()
-            xlims = ax.get_xlim()
-            ylims = ax.get_ylim()
+            xlims = [-xylim, xylim]
+            ylims = [-xylim, xylim]
             new_ub_A = np.vstack((poly.ub_A, [[1,0],[-1,0],[0,1],[0,-1]]))
             new_ub_b = np.hstack((poly.ub_b, [xlims[1], -1*xlims[0], ylims[1], -1*ylims[0]]))
             P2 = Polytope_2(new_ub_A, new_ub_b)
-            P2.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
-            print('an unobunded polytope was plotted imperfectly')
+            V2 = ptope.extreme(P2)
+            if V2 is not None:
+                P2.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
+                print('an unbounded polytope was plotted imperfectly')
+            else:
+                print('polytope not plotted')
 
     plt.xlim(-xylim, xylim)
     plt.ylim(-xylim, xylim)

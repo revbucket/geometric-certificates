@@ -1,20 +1,20 @@
-# =====================
-# Imports
-# =====================
-
-from geocert import compute_boundary_batch, compute_l_inf_ball_batch, compute_l2_ball_batch, incremental_geocert
-from plnn import PLNN
-from _polytope_ import Polytope, from_polytope_dict
-import utilities as utils
-import os
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.autograd import Variable
-from torchvision import datasets, transforms
-from convex_adversarial import robust_loss
+# # =====================
+# # Imports
+# # =====================
+#
+# from geocert import compute_boundary_batch, compute_l_inf_ball_batch, compute_l2_ball_batch, incremental_geocert
+# from plnn import PLNN
+# from _polytope_ import Polytope, from_polytope_dict
+# import utilities as utils
+# import os
+# import matplotlib.pyplot as plt
+# import numpy as np
+# import torch
+# import torch.nn as nn
+# import torch.optim as optim
+# from torch.autograd import Variable
+# from torchvision import datasets, transforms
+# from convex_adversarial import robust_loss
 
 
 
@@ -49,7 +49,7 @@ from convex_adversarial import robust_loss
 # unshared_facets = compute_boundary_batch(poly_list)
 #
 # x_0 = np.asarray([[0], [0.4]])
-# t = compute_l_inf_ball_batch(poly_list, x_0)
+# t, _, _ = compute_l_inf_ball_batch(poly_list, x_0)
 #
 # print('max linf size:', t)
 
@@ -128,17 +128,17 @@ from convex_adversarial import robust_loss
 
 
 
-# # ##########################################################################
-# # #                                                                        #
-# # #                          Example 3                                     #
-# # #                                                                        #
-# # ##########################################################################
-#
-# # run incremental 'GeoCert' from the point [0,0]. Network is simple ReLu net with
-# # Gaussian random weights. Finds maximal l_p ball within which the class label
-# # remains the same.
-#
-#
+# ##########################################################################
+# #                                                                        #
+# #                          Example 3                                     #
+# #                                                                        #
+# ##########################################################################
+
+# run incremental 'GeoCert' from the point [0,0]. Network is simple ReLu net with
+# Gaussian random weights. Finds maximal l_p ball within which the class label
+# remains the same.
+
+
 # # ==================================
 # # Initialize Network
 # # ==================================
@@ -175,7 +175,7 @@ from convex_adversarial import robust_loss
 # # #                                                                        #
 # # ##########################################################################
 #
-# # apply incremental geocert to a robust classifier. Finds maximal l_p balls
+# # apply incremental geocert to a normal and l1-regularized classifier. Finds maximal l_p balls
 # # for random points in R^2.
 #
 # # ==================================
@@ -214,37 +214,43 @@ from convex_adversarial import robust_loss
 # # Train Network
 # # ==================================
 #
-# print('===============Training Network============')
+# # print('===============Training Network============')
+# # opt = optim.Adam(net.parameters(), lr=1e-3)
+# # for i in range(1000):
+# #     out = net(Variable(X))
+# #     l = nn.CrossEntropyLoss()(out, Variable(y))
+# #     err = (out.max(1)[1].data != y).float().mean()
+# #     if i % 100 == 0:
+# #         print(l.data[0], err)
+# #     opt.zero_grad()
+# #     (l).backward()
+# #     opt.step()
+#
+# def l1_loss(net):
+#
+#     return sum([_.norm(p=1) for _ in net.parameters() if _.dim() > 1])
+#
+#
+# print('===============Training Network with Regularization============')
 # opt = optim.Adam(net.parameters(), lr=1e-3)
 # for i in range(1000):
 #     out = net(Variable(X))
-#     l = nn.CrossEntropyLoss()(out, Variable(y))
+#     l = nn.CrossEntropyLoss()(out, Variable(y)).view([1])
+#
+#     l1_scale = torch.Tensor([1e-4])
+#     l += l1_scale * l1_loss(net).view([1])
+#
 #     err = (out.max(1)[1].data != y).float().mean()
-#     if i % 100 == 0:
-#         print(l.data[0], err)
 #     opt.zero_grad()
 #     (l).backward()
 #     opt.step()
 #
-# # print('===============Robustly Training Network============')
-# # data = []
-# # opt = optim.Adam(net.parameters(), lr=1e-3)
-# # for i in range(1000):
-# #     robust_ce, robust_err = robust_loss(net, epsilon, X, y)
-# #     out = net(X)
-# #     l2 = nn.CrossEntropyLoss()(out, Variable(y))
-# #     err = (out.max(1)[1].data != y).float().mean()
-# #     data.append([l2.data[0], robust_ce.data[0], err, robust_err])
-# #     if i % 100 == 0:
-# #         print(robust_ce.data[0], robust_err)
-# #     opt.zero_grad()
-# #     (robust_ce).backward()
-# #     opt.step()
+# print('error: ', err)
 #
 #
 #
 # # ==================================
-# # Visualize: baseline classifier boundary
+# # Visualize:  classifier boundary
 # # ==================================
 #
 # XX, YY = np.meshgrid(np.linspace(0, 1, 100), np.linspace(0, 1, 100))

@@ -198,7 +198,7 @@ def incremental_geocert(lp_norm, net, x, ax, plot_dir, n_colors=200):
             else:
                 print('weve already seen that polytope')
 
-        if(index % 10 == 0 ):
+        if(index % 1 == 0 ):
             geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
                               x, plot_dir, n_colors, iter=index)
         index = index + 1
@@ -284,15 +284,16 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
     boundary_facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if heap_elem.decision_bound]
     colors = utils.get_spaced_colors(n_colors)[0:len(polytope_list)]
 
+    xylim = 50.0
 
     utils.plot_polytopes_2d(polytope_list, colors=colors, alpha=0.7,
                           xylim=5, ax=ax, linestyle='dashed', linewidth=0)
 
     utils.plot_facets_2d(facet_list, alpha=0.7,
-                   xylim=5, ax=ax, linestyle='dashed', linewidth=3, color='black')
+                   xylim=xylim, ax=ax, linestyle='dashed', linewidth=3, color='black')
 
     utils.plot_facets_2d(boundary_facet_list, alpha=0.7,
-                   xylim=5, ax=ax, linestyle='dashed', linewidth=3, color='red')
+                   xylim=xylim, ax=ax, linestyle='dashed', linewidth=3, color='red')
 
     if lp_norm == 'l_inf':
         utils.plot_linf_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
@@ -302,6 +303,14 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
         raise NotImplementedError
 
     plt.autoscale()
+    new_xlims = plt.xlim()
+    new_ylims = plt.ylim()
+
+    if min(new_xlims) > -xylim and max(new_xlims) < xylim and min(new_ylims) > -xylim and max(new_ylims) < xylim:
+        pass
+    else:
+        plt.xlim(-xylim, xylim)
+        plt.ylim(-xylim, xylim)
     filename = plot_dir + str(iter) + '.svg'
     plt.savefig(filename)
     plt.close()
