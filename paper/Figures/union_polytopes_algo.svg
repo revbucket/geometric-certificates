@@ -1,33 +1,33 @@
-<?xml version="1.1" encoding="UTF-8"?>
+<?xml version="1.1" encoding="windows-1252"?>
 <svg xmlns="http://www.w3.org/2000/svg"
     xmlns:latexdraw="http://latexdraw.sourceforge.net/namespaces/latexdraw"
     version="1.1" baseProfile="full">
     <g>
-        <g latexdraw:type="polygon" id="id183417570">
+        <g latexdraw:type="polygon" id="id12008354">
             <polygon
                 points="972.247016937265,306.3547926450042 794.1443835875018,394.1692090708448 652.9741659204599,278.74711057468414 693.1947041011549,140.51762164261396 882.1087581720891,75.46444344022854 979.9772619423303,169.6828064477245 "
                 stroke-width="3.5" stroke="black" fill="#dcdcdc"
                 stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
         </g>
-        <g latexdraw:type="polygon" id="id233485140">
+        <g latexdraw:type="polygon" id="id33523267">
             <polygon
                 points="828.4423483945502,377.51814290967275 641.8590837102403,270.9857853112701 478.0098991777033,324.79134296140506 462.43019589733115,481.087060071048 599.1812067293143,614.466984115281 783.9828930484503,536.7410565642646 "
                 stroke-width="3.5" stroke="black" fill="#dcdcdc"
                 stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
         </g>
-        <g latexdraw:type="polygon" id="id1714210257">
+        <g latexdraw:type="polygon" id="id28966670">
             <polygon
                 points="482.1505383970134,345.72838159780036 336.12080511210564,178.46595582961038 152.05340985096836,251.23507031745112 102.56179205779287,409.03402799664445 223.36798921582437,557.0100592646456 465.0381783209294,481.91589818438433 "
                 stroke-width="3.5" stroke="black" fill="#dcdcdc"
                 stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
         </g>
-        <g latexdraw:type="polygon" id="id1461330806">
+        <g latexdraw:type="polygon" id="id14795249">
             <polygon
                 points="654.7094978801094,278.31601824702665 481.0472502915096,344.5080067336805 334.6175555948038,177.78736345308 434.7307526467257,30.4377100229176 643.1805508768582,15.704406805134369 707.8148899801917,135.19393005597374 "
                 stroke-width="3.5" stroke="black" fill="#dcdcdc"
                 stroke-dasharray="8.819444444444445, 5.291666666666667" latexdraw:rotationAngle="0.0"/>
         </g>
-        <g latexdraw:type="dot" id="id479483866" latexdraw:size="20.0"
+        <g latexdraw:type="dot" id="id25554297" latexdraw:size="20.0"
             latexdraw:dotShape="*" latexdraw:position="479.04761904761847 272.3809523809523">
             <path
                 d="M 488.2783882783877 272.3809523809523 C 488.2783882783877 277.47896545631346 484.14563212297963 281.6117216117215 479.04761904761847 281.6117216117215 C 473.9496059722573 281.6117216117215 469.81684981684924 277.47896545631346 469.81684981684924 272.3809523809523 C 469.81684981684924 267.2829393055911 473.9496059722573 263.15018315018307 479.04761904761847 263.15018315018307 C 484.14563212297963 263.15018315018307 488.2783882783877 267.2829393055911 488.2783882783877 272.3809523809523 z "
@@ -35,16 +35,21 @@
                 stroke-linejoin="butt" stroke-width="1.25"
                 stroke-miterlimit="10.0" stroke-dashoffset="0.0" stroke="black"/>
         </g>
-        <g latexdraw:type="polygon" id="id120754997">
+        <g latexdraw:type="polygon" id="id29236118">
             <polygon
                 points="654.7094978801094,278.3160182470264 481.0472502915096,344.50800673368025 334.6175555948038,177.78736345307976 434.7307526467257,30.437710022917372 643.1805508768582,15.704406805134141 707.8148899801917,135.1939300559735 "
                 stroke-width="6.0" stroke="#fe3f3f" fill="none" latexdraw:rotationAngle="0.0"/>
         </g>
-        <g latexdraw:type="square" id="id924768734">
+        <g latexdraw:type="square" id="id1293143">
             <rect x="448.4999999999999" y="241.62499999999994"
                 width="62.999999999999886" height="62.999999999999886"
                 latexdraw:borderPos="outer" stroke-width="4.5"
                 stroke="#010101" fill="none"/>
+        </g>
+        <g latexdraw:type="joinedLines" id="id11387644">
+            <polyline
+                points="335.48387096774195,178.0645161290322 481.2903225806451,343.8709677419354 655.4838709677418,276.774193548387 707.7419354838709,134.19354838709674 "
+                stroke-width="8.0" stroke="black" fill="none" latexdraw:rotationAngle="0.0"/>
         </g>
     </g>
     <defs/>
@@ -54,18 +59,18 @@
             <latexdraw:displayXScale>true</latexdraw:displayXScale>
             <latexdraw:displayYScale>true</latexdraw:displayYScale>
             <latexdraw:unit>CM</latexdraw:unit>
-            <latexdraw:zoom>0.6499999999999997</latexdraw:zoom>
+            <latexdraw:zoom>1.2500000000000002</latexdraw:zoom>
             <latexdraw:magneticGridStyle>NONE</latexdraw:magneticGridStyle>
             <latexdraw:gridGap>20</latexdraw:gridGap>
             <latexdraw:magneticGrid>false</latexdraw:magneticGrid>
             <latexdraw:version>3.3.8</latexdraw:version>
             <latexdraw:size>
-                <latexdraw:width>1248</latexdraw:width>
-                <latexdraw:height>1388</latexdraw:height>
+                <latexdraw:width>1942</latexdraw:width>
+                <latexdraw:height>1042</latexdraw:height>
             </latexdraw:size>
             <latexdraw:position>
-                <latexdraw:x>1312.0</latexdraw:x>
-                <latexdraw:y>52.0</latexdraw:y>
+                <latexdraw:x>-11.0</latexdraw:x>
+                <latexdraw:y>-11.0</latexdraw:y>
             </latexdraw:position>
         </latexdraw:metadata>
     </metadata>
