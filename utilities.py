@@ -193,18 +193,22 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
     if colors == None:
         colors = [np.random.rand(3) for _ in range(0, len(poly_list))]
 
+    if(np.size(xylim)==1):
+        xlim = [0, xylim]
+        ylim = [0, xylim]
+    else:
+        xlim = xylim
+        ylim = xylim
+
     for poly, color in zip(poly_list, colors):
         P = Polytope_2(poly.ub_A, poly.ub_b)
         V = ptope.extreme(P)
 
         if V is not None:
             P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
-
         else:
-            xlims = [-xylim, xylim]
-            ylims = [-xylim, xylim]
             new_ub_A = np.vstack((poly.ub_A, [[1,0],[-1,0],[0,1],[0,-1]]))
-            new_ub_b = np.hstack((poly.ub_b, [xlims[1], -1*xlims[0], ylims[1], -1*ylims[0]]))
+            new_ub_b = np.hstack((poly.ub_b, [xlim[1], -1*xlim[0], ylim[1], -1*ylim[0]]))
             P2 = Polytope_2(new_ub_A, new_ub_b)
             V2 = ptope.extreme(P2)
             if V2 is not None:
@@ -213,14 +217,20 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
             else:
                 print('polytope not plotted')
 
-    plt.xlim(-xylim, xylim)
-    plt.ylim(-xylim, xylim)
+    plt.xlim(xlim[0], xlim[1])
+    plt.ylim(ylim[0], ylim[1])
 
 
 def plot_facets_2d(facet_list, alpha=1.0,
                    xylim=5, ax=plt.axes(), linestyle='solid', linewidth=3, color='black'):
     """Plots a list of facets which exist as line segments in R^2
     """
+    if(np.size(xylim)==1):
+        xlim = [0, xylim]
+        ylim = [0, xylim]
+    else:
+        xlim = xylim
+        ylim = xylim
 
     for facet in facet_list:
         P = Polytope_2(facet.ub_A, facet.ub_b)
@@ -238,8 +248,20 @@ def plot_facets_2d(facet_list, alpha=1.0,
             x = [x1, x2]; y = [y1, y2]
 
             ax.plot(x, y, c=color, linestyle=linestyle, linewidth=linewidth)
-    plt.xlim(-xylim, xylim)
-    plt.ylim(-xylim, xylim)
+
+        else:
+            new_ub_A = np.vstack((facet.ub_A, [[1, 0], [-1, 0], [0, 1], [0, -1]]))
+            new_ub_b = np.hstack((facet.ub_b, [xlim[1], -1 * xlim[0], ylim[1], -1 * ylim[0]]))
+            P2 = Polytope_2(new_ub_A, new_ub_b)
+            V2 = ptope.extreme(P2)
+            if V2 is not None:
+                P2.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
+                print('an unbounded facet was plotted imperfectly')
+            else:
+                print('facet not plotted')
+
+    plt.xlim(xlim[0], xlim[1])
+    plt.ylim(ylim[0], ylim[1])
 
 
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
@@ -337,8 +359,8 @@ def get_unique_relu_configs(network, xylim, numpts):
         xlim = [0, xylim]
         ylim = [0, xylim]
     else:
-        xlim = xylim[0]
-        ylim = xylim[1]
+        xlim = xylim
+        ylim = xylim
 
     num_activations = []
     relu_configs_list = []

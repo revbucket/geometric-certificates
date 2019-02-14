@@ -306,12 +306,15 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
     new_xlims = plt.xlim()
     new_ylims = plt.ylim()
 
+    print(new_xlims)
+    print(new_ylims)
+
     if min(new_xlims) > -xylim and max(new_xlims) < xylim and min(new_ylims) > -xylim and max(new_ylims) < xylim:
         pass
     else:
         plt.xlim(-xylim, xylim)
         plt.ylim(-xylim, xylim)
-    filename = plot_dir + str(iter) + '.svg'
+    filename = plot_dir + str(iter) + '.png'
     plt.savefig(filename)
     plt.close()
 
