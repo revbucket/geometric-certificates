@@ -19,6 +19,28 @@ import copy
 
 # Batched algorithm is when the union of polytopes is specified beforehand
 
+def batch_GeoCert(polytope_list, x, norm='inf', comp_method='slow'):
+    """ Computes the linf distance from x to the boundary of the union of polytopes
+
+        Norm options: {inf | 2}
+        Comparison method options: {slow | unstable | fast_ReLu}
+    """
+
+    # First check if x is in one of the polytopes
+    if not any(poly.is_point_feasible(x) for poly in polytope_list):
+        return -1
+
+    print('----------Computing Boundary----------')
+    boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
+
+    if norm == 'l_inf':
+        dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
+    elif norm == 'l_2':
+        dist_to_boundary = [facet.l2_dist(x) for facet in boundary]
+
+    return min(dist_to_boundary), boundary, shared_facets
+
+
 def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
     """ Takes in a list of polytopes and outputs the facets that define the
         boundary
@@ -71,47 +93,12 @@ def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
 
 
 
-def compute_l_inf_ball_batch(polytope_list, x, comp_method = 'slow'):
-    """ Computes the linf distance from x to the boundary of the union of polytopes
-
-        Comparison method options: {slow | unstable | fast_ReLu}
-    """
-
-    # First check if x is in one of the polytopes
-    if not any(poly.is_point_feasible(x) for poly in polytope_list):
-        return -1
-
-    print('----------Computing Boundary----------')
-    boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
-
-    dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
-
-    return min(dist_to_boundary), boundary, shared_facets
-
-def compute_l2_ball_batch(polytope_list, x, comp_method = 'slow'):
-    """ Computes the l2 distance from x to the boundary of the union of polytopes
-
-        Comparison method options: {slow | unstable | fast_ReLu}
-    """
-
-    # First check if x is in one of the polytopes
-    if not any(poly.is_point_feasible(x) for poly in polytope_list):
-        return -1
-
-    print('----------Computing Boundary----------')
-    boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
-
-    dist_to_boundary = [facet.l2_dist(x) for facet in boundary]
-
-    return min(dist_to_boundary), boundary, shared_facets
-
-
-
 ##########################################################################
 #                                                                        #
 #                           INCREMENTAL GEOCERT                          #
 #                                                                        #
 ##########################################################################
+
 #TODO: why are polytopes being seeen more than once?
 class HeapElement(object):
     """ Wrapper of the element to be pushed around the priority queue
@@ -129,7 +116,7 @@ class HeapElement(object):
         return self.lp_dist < other.lp_dist
 
 
-def incremental_geocert(lp_norm, net, x, ax, plot_dir, n_colors=200):
+def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
     """ Computes l_inf distance to decision boundary in incremental steps of
         expanding the search space
 
