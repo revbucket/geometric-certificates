@@ -241,8 +241,8 @@ class Face(Polytope):
 
     def check_same_facet_pg(self, other):
         """ Checks if this facet is the same as the other facet. Assumes
-            that self and other are perfectly glued if they intersect at all
-
+            that self and other are perfectly glued if they intersect at all.
+            Uses LP to check if intersection of facets is (n-1) dimensional.
         """
         # if either is not a facet, then return False
         if not (self.check_facet() and other.check_facet()):
@@ -260,11 +260,13 @@ class Face(Polytope):
                         tight_list=np.hstack((self.tight_list, new_tight_list)))
         return new_face.check_facet()
 
+
     def check_same_facet_pg_slow(self, other):
         """ Checks if this facet is the same as the other facet. Assumes
             that self and other are perfectly glued if they intersect at all
 
-            Method uses PyPi library 'polytope' to compare
+            Method uses PyPi library 'polytope' to compare vertices of the
+            faces
         """
 
         # if either is not a facet, then return False
@@ -281,13 +283,11 @@ class Face(Polytope):
         V2 = utils.ptope.extreme(P2)
 
         V1_ = []
-
         if(V1 is not None and V2 is not None):
             for vertex in V1:
                 flag = utils.fuzzy_equal(np.matmul(self.a_eq, vertex), self.b_eq)
                 if flag:
                     V1_.append(vertex)
-
             V2_ = []
             for vertex in V2:
                 flag = utils.fuzzy_equal(np.matmul(other.a_eq, vertex), other.b_eq)
@@ -295,7 +295,6 @@ class Face(Polytope):
                     V2_.append(vertex)
 
             if len(V1_) == len(V2_):
-
                 flags = []
                 for vertex in V1_:
                     flags_2 = []
@@ -305,9 +304,7 @@ class Face(Polytope):
                         else:
                             flags_2.append(False)
                     flags.append(any(flags_2))
-
                 return all(flags)
-
             else:
                 return False
         else:
@@ -319,7 +316,8 @@ class Face(Polytope):
         """ Potentially faster technique to check facets are the same
             The belief here is that if both (self, other) are facets, with their
             neuron configs specified, then if they have the same hyperplane and
-            have config hamming distance 1, then they are the same facet
+            have config hamming distance 1 (plus condition explained below),
+            then they are the same facet
 
             must account for the case where each polytope can be simulatenously
             glued (not perfectly glued) to more than one hyperplane. two
@@ -342,9 +340,9 @@ class Face(Polytope):
 
 
     def linf_dist(self, x):
-        #TODO: this method doesn't always correctly find the projection onto a facet
+        #TODO: this method doesn't  seem to always correctly find the projection onto a facet
 
-        """ Returns the l_inf distance to point x """
+        """ Returns the l_inf distance to point x using LP"""
 
         # set up the linear program
         # min_{t,v} t
@@ -396,6 +394,8 @@ class Face(Polytope):
 
 
     def l2_dist(self, x):
+        """ Returns the l_2 distance to point x using LP"""
+
         # set up the quadratic program
         # min_{v} v^T*v
         # s.t.

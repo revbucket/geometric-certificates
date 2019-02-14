@@ -207,6 +207,8 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
         if V is not None:
             P.plot(ax, color=color, alpha=alpha, linestyle=linestyle, linewidth=linewidth)
         else:
+            # Polytope may be unbounded, thus add additional constraints x in [-xylim, xylim]
+            # and y in [-xylim, xylim]
             new_ub_A = np.vstack((poly.ub_A, [[1,0],[-1,0],[0,1],[0,-1]]))
             new_ub_b = np.hstack((poly.ub_b, [xlim[1], -1*xlim[0], ylim[1], -1*ylim[0]]))
             P2 = Polytope_2(new_ub_A, new_ub_b)
@@ -280,7 +282,7 @@ def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
 def get_spaced_colors(n):
     """Given number, n, returns n colors which are visually well distributed
     """
-    max_value = 16581375  # 255**3
+    max_value = 255**3
     interval = int(max_value / n)
     colors = [hex(I)[2:].zfill(6) for I in range(0, max_value, interval)]
 
@@ -290,7 +292,6 @@ def get_spaced_colors(n):
 def get_color_dictionary(list):
     """Creates a dictionary of evenly spaced colors, keys are elements in provided lists
     """
-
     n = len(list)
     colors = get_spaced_colors(n)
     color_dict = {}
@@ -302,7 +303,7 @@ def get_color_dictionary(list):
 
 
 # ------------------------------------
-# Polytope class from PyPi library
+# Polytope class from PyPi
 # ------------------------------------
 """ Modified class is used for plotting polytopes and utilizing other functions 
     from 'polytope' library
@@ -337,7 +338,7 @@ class Polytope_2(ptope.Polytope):
 # Ugly Plotting Code
 # --------------------------------------------------------------------------------------
 
-def binarize_relu_configs( relu_configs):
+def binarize_relu_configs(relu_configs):
     """ Takes a list of relu configs and turns them into one long binary string
         (each element i of relu_configs is assumed to be an array of relu acts at layer i)
     """
@@ -346,11 +347,11 @@ def binarize_relu_configs( relu_configs):
     return bin_code
 
 def get_unique_relu_configs(network, xylim, numpts):
-    """ Samples within a square of size (xylim) x (xylim), and returns the unique
+    #TODO: repetition in what is returned
+    """ Samples within a square of size (xylim[0]) x (xylim[1]), and returns the unique
         ReLu activations. Total number of samples is numpts^2
 
         Returns: unique relu_configs    =>  (list of arrays of unique ReLu acts)
-                 unique_bin_acts        =>  (list of unique ReLu acts as a binary string)
                  xs                     =>  (points sampled)
                  num_activations        =>  (list of unique numbers associated with Relu acts)
     """
@@ -365,7 +366,6 @@ def get_unique_relu_configs(network, xylim, numpts):
     num_activations = []
     relu_configs_list = []
     xs = []
-
 
     for x in np.linspace(xlim[0], xlim[1], numpts):
         for y in np.linspace(ylim[0], ylim[1], numpts):
@@ -386,11 +386,6 @@ def get_unique_relu_configs(network, xylim, numpts):
                 relu_configs_list.append(relu_configs)
 
             xs.append(pt_0.data.numpy())
-
-    # unique_bin_acts = set(num_activations)
-    # indices = [num_activations.index(unique_bin_act) for unique_bin_act in unique_bin_acts]
-    #
-    # unique_relu_configs_list = [relu_configs_list[index] for index in indices]
 
     return relu_configs_list, num_activations, xs, num_activations
 

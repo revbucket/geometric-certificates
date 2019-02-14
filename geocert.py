@@ -48,6 +48,8 @@ def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
                    for ex_facet in shared_facets]
 
         elif comparison_method == 'fast_ReLu':
+            # Uses information of ReLu activations to check if two facets
+            # are the same
             bool_unshared = [og_facet.check_same_facet_config(ex_facet)
                    for ex_facet in unshared_facets]
             bool_shared = [og_facet.check_same_facet_config(ex_facet)
@@ -65,13 +67,12 @@ def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
         else:
             unshared_facets.append(og_facet)
 
-
     return unshared_facets, shared_facets
 
 
 
 def compute_l_inf_ball_batch(polytope_list, x, comp_method = 'slow'):
-    """ Computes the distance from x to the boundary of the union of polytopes
+    """ Computes the linf distance from x to the boundary of the union of polytopes
 
         Comparison method options: {slow | unstable | fast_ReLu}
     """
@@ -88,7 +89,7 @@ def compute_l_inf_ball_batch(polytope_list, x, comp_method = 'slow'):
     return min(dist_to_boundary), boundary, shared_facets
 
 def compute_l2_ball_batch(polytope_list, x, comp_method = 'slow'):
-    """ Computes the distance from x to the boundary of the union of polytopes
+    """ Computes the l2 distance from x to the boundary of the union of polytopes
 
         Comparison method options: {slow | unstable | fast_ReLu}
     """
@@ -111,7 +112,7 @@ def compute_l2_ball_batch(polytope_list, x, comp_method = 'slow'):
 #                           INCREMENTAL GEOCERT                          #
 #                                                                        #
 ##########################################################################
-
+#TODO: why are polytopes being seeen more than once?
 class HeapElement(object):
     """ Wrapper of the element to be pushed around the priority queue
         in the incremental algorithm

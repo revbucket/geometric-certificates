@@ -10,6 +10,8 @@ import numpy as np
 
 
 class PLNN(nn.Module):
+    #TODO: determine if building net addition was necessary
+    # add some explanations for some methods
     """ Simple piecewise neural net.
         Fully connected layers and ReLus only
     """
