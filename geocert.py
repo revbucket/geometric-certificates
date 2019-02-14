@@ -9,7 +9,6 @@ import torch
 import numpy as np
 import heapq
 import matplotlib.pyplot as plt
-import copy
 
 ##############################################################################
 #                                                                            #
@@ -99,7 +98,6 @@ def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
 #                                                                        #
 ##########################################################################
 
-#TODO: why are polytopes being seeen more than once?
 class HeapElement(object):
     """ Wrapper of the element to be pushed around the priority queue
         in the incremental algorithm
@@ -169,11 +167,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
             print('---Opening New Polytope---')
 
             popped_facet = pop_el.facet
-            pre_relus, post_relus = net.relu_config(torch.Tensor(popped_facet.interior))
-            tight_boolean = [utils.fuzzy_equal(elem, 0.0, tolerance=1e-6)
-                             for activations in pre_relus for elem in activations]
-            orig_configs = popped_facet.config
-            new_configs = get_new_configs(tight_boolean, orig_configs)
+            new_configs = popped_facet.get_new_configs(net)
             new_configs_flat = utils.flatten_config(new_configs)
 
             # If polytope has already been seen, don't add it again
@@ -198,7 +192,7 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
         pushes facets to the heap, and updates seen maps
     '''
 
-    polytope_facets = polytope.generate_facets_configs(seen_to_polytope_map, check_feasible=True)
+    polytope_facets = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
     print('num facets: ', len(polytope_facets))
 
     polytope_config = utils.flatten_config(polytope.config)
@@ -206,7 +200,6 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
                                                            true_label)
     seen_to_polytope_map[polytope_config] = polytope
     seen_to_facet_map[polytope_config] = polytope_facets
-
 
 
     for facet in polytope_facets:
@@ -219,12 +212,14 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
                 heapq.heappush(pr_queue, heap_el)
         else:
             # For first time use, popped facet doesn't exist
+            # so we can't check against it
             lp_dist = get_lp_dist(lp_norm, facet, x)
             heap_el = HeapElement(lp_dist, facet, decision_bound=False,
                                   exact_or_estimate='exact')
             heapq.heappush(pr_queue, heap_el)
 
     for facet in polytope_adv_constraints:
+
         lp_dist = get_lp_dist(lp_norm, facet, x)
         heap_el = HeapElement(lp_dist, facet, decision_bound=True,
                               exact_or_estimate='exact')
@@ -237,26 +232,6 @@ def get_lp_dist(lp_norm, facet, x):
         return facet.linf_dist(x)
     else:
         raise NotImplementedError
-
-
-def get_new_configs(tight_boolean_configs, orig_configs):
-    ''' Function takes original ReLu configs and flips the activation of
-        the ReLu at index specified in 'tight_boolean_configs'.
-    '''
-
-    new_configs = copy.deepcopy(orig_configs)
-
-    for i, tight_bools in enumerate(tight_boolean_configs):
-        for j, tight_bool in enumerate(tight_bools):
-            if tight_bool == 1:
-                if orig_configs[i][j] == 1.0:
-                    new_configs[i][j] = 0.0
-                elif orig_configs[i][j] == 0.0:
-                    new_configs[i][j] = 1.0
-                else:
-                    raise AttributeError
-
-    return new_configs
 
 
 def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
@@ -293,9 +268,6 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
     plt.autoscale()
     new_xlims = plt.xlim()
     new_ylims = plt.ylim()
-
-    print(new_xlims)
-    print(new_ylims)
 
     if min(new_xlims) > -xylim and max(new_xlims) < xylim and min(new_ylims) > -xylim and max(new_ylims) < xylim:
         pass

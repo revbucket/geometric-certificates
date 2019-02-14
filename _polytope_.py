@@ -4,6 +4,7 @@ import numpy as np
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
 from cvxopt import matrix, solvers
+import copy
 
 ##########################################################################
 #                                                                        #
@@ -45,7 +46,7 @@ class Polytope(object):
 
         return facets
 
-    def generate_facets_configs(self, seen_polytopes_dict, check_feasible=False):
+    def generate_facets_configs(self, seen_polytopes_dict, net, check_feasible=False):
         """ Generates all (n-1) dimensional facets of polytope which aren't
             shared with other polytopes in list. (for ReLu nets)
         """
@@ -58,34 +59,13 @@ class Polytope(object):
                 facet.check_feasible()
             facet.check_facet()
 
-            #TODO: fix this code section below (no need to add already seen facets)
-
-            # # Don't add facets which are connected to seen polytopes (don't want to add facet twice)
-            # configs_flat = utils.flatten_config(facet.config)
-            # close_seen_bools = [utils.string_hamming_distance(configs_flat, other_config_flat) == 1
-            #               for other_config_flat in seen_polytopes_dict ]
-            #
-            # shared_facet_bools = [facet.tight_list[0] == utils.hamming_indices(configs_flat, other_config_flat)[0]
-            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
-            #                        if seen_bool]
-            # print('------')
-            # print([facet.tight_list[0]
-            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
-            #                        if seen_bool])
-            # print([utils.hamming_indices(configs_flat, other_config_flat)[0]
-            #                        for seen_bool, other_config_flat in zip(close_seen_bools,seen_polytopes_dict)
-            #                        if seen_bool])
-            # print('------')
-            # if facet.is_facet and not any(shared_facet_bools):
-
             if facet.is_facet:
-                facets.append(facet)
-
-            # else:
-            #     if(facet.is_facet):
-            #         print('shared facet!')
-            #     else:
-            #         print('not a facet')
+                # Check to see if facet is shared with a seen polytope
+                new_configs = facet.get_new_configs(net)
+                new_configs_flat = utils.flatten_config(new_configs)
+                shared_facet_bools = [new_configs_flat == other_config_flat for other_config_flat in seen_polytopes_dict]
+                if not any(shared_facet_bools):
+                    facets.append(facet)
 
         return facets
 
@@ -125,7 +105,7 @@ class Face(Polytope):
         super(Face, self).__init__(poly_a, poly_b, config=config)
         self.poly_a = poly_a
         self.poly_b = poly_b
-        self.a_eq = self.poly_a[tight_list]   # EDIT: self.a_eq = self.poly_a[tight_list]
+        self.a_eq = self.poly_a[tight_list]
         self.b_eq = self.poly_b[tight_list]
         self.tight_list = tight_list
         self.is_feasible = None
@@ -152,6 +132,7 @@ class Face(Polytope):
                                      b_eq=self.b_eq,
                                      bounds=bounds)
         is_feasible = (linprog_result.status == 0)
+
         self.is_feasible = is_feasible
         return self.is_feasible
 
@@ -166,18 +147,17 @@ class Face(Polytope):
 
         m, n = self.poly_a.shape
         # Dimension check of (n-1) facet
-        # Do min -t
+        # Do min 0
         # st. Ax + t <= b
-        #         -t <= 0
-        # and if the optimal value is < 0 then (n-1) dimensional
+        #          t  > 0
+        # and if is_feasible, then good
         c = np.zeros(n + 1)
-        c[-1] = -1
 
         new_poly_a = np.ones([m, n+1])
         new_poly_a[:, :-1] = self.poly_a
         new_poly_a[self.tight_list, -1] = 0     # remove affect of t on tight constraints
         bounds = [(None, None) for _ in range(n)]
-        bounds.append((0, None))
+        bounds.append((1e-11, None))
 
         m2, n2 = self.a_eq.shape
         a_eq_new = np.zeros([m2, n+1])
@@ -190,11 +170,9 @@ class Face(Polytope):
                                      b_eq=self.b_eq,
                                      bounds=bounds, method='interior-point')
 
-        if (linprog_result.status == 0 and
-            linprog_result.fun < 0):
+        if linprog_result.status == 0:
             self.is_facet = True
             self.interior = linprog_result.x[0:-1]
-
         elif linprog_result == 3:
             print('error, unbounded, in linprog for check facet')
 
@@ -337,7 +315,31 @@ class Face(Polytope):
 
         return ReLu_distance_check and not self._same_tight_constraint(other)
 
+    def get_new_configs(self, net):
+        ''' Function takes original ReLu configs and flips the activation of
+            the ReLu at index specified in 'tight_boolean_configs'.
+        '''
+        #TODO: this could be improved if tight index was consistent with
+        # order of ReLu configs, but it isn't for some reason?
+        # Solution: find tight ReLu activation by running interior pt through net
+        orig_configs = self.config
+        pre_relus, post_relus = net.relu_config(torch.Tensor(self.interior))
+        tight_boolean_configs = [utils.fuzzy_equal(elem, 0.0, tolerance=1e-6)
+                         for activations in pre_relus for elem in activations]
 
+        new_configs = copy.deepcopy(orig_configs)
+
+        for i, tight_bools in enumerate(tight_boolean_configs):
+            for j, tight_bool in enumerate(tight_bools):
+                if tight_bool == 1:
+                    if orig_configs[i][j] == 1.0:
+                        new_configs[i][j] = 0.0
+                    elif orig_configs[i][j] == 0.0:
+                        new_configs[i][j] = 1.0
+                    else:
+                        raise AttributeError
+
+        return new_configs
 
     def linf_dist(self, x):
         #TODO: this method doesn't  seem to always correctly find the projection onto a facet
@@ -416,7 +418,6 @@ class Face(Polytope):
             x = np.array(quad_program_result['x'])
             return np.linalg.norm(x)
         else:
-            print(quad_program_result)
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
 
