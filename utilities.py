@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from bitstring import BitArray
 import polytope as ptope
 import matplotlib.patches as patches
+import pulp as plp
 
 
 ##########################################################################
@@ -178,6 +179,49 @@ def as_numpy(tensor_or_array):
     if isinstance(tensor_or_array, torch.Tensor):
         tensor_or_array = tensor_or_array.cpu().detach().numpy()
     return tensor_or_array
+
+##########################################################################
+#                                                                        #
+#                     Optimization Utilities                             #
+#                                                                        #
+##########################################################################
+
+def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
+    m, n = np.shape(A_ub)
+    m2, n2 = np.shape(a_eq)
+
+    # Setup Optimization Model
+    opt_model = plp.LpProblem(name="LP program")
+    x_vars = [plp.LpVariable(cat=plp.LpContinuous,
+                             lowBound=bounds[j][0], upBound=bounds[j][1],
+                             name="x_{0}".format(j)) for j in range(0, n)]
+
+    # Set Objective
+    objective = plp.lpDot(x_vars, c)
+    opt_model.sense = plp.LpMinimize
+    opt_model.setObjective(objective)
+
+    # Less than equal constraints
+    for i in range(0, m):
+        opt_model.addConstraint(plp.LpConstraint(
+            e=plp.lpDot(A_ub[i], x_vars),
+            sense=plp.LpConstraintLE,
+            rhs=b_ub[i],
+            name="constraint_{0}".format(i)))
+
+    # Equality Constraints
+    for i in range(0, m2):
+        opt_model.addConstraint(plp.LpConstraint(
+            e=plp.lpDot(a_eq[i], x_vars),
+            sense=plp.LpConstraintEQ,
+            rhs=b_eq[i],
+            name="eq_constraint_{0}".format(i)))
+
+    plp.GUROBI_CMD(msg=0).solve(opt_model)
+    status = (opt_model.status == 1)    # 1 if solved
+
+    return status, opt_model
+
 
 
 ##########################################################################
@@ -471,4 +515,3 @@ def _get_patch(poly1, **kwargs):
         patch = mpl.patches.Polygon([], True, **kwargs)
         patch.set_zorder(0)
     return patch
-

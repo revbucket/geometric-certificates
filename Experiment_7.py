@@ -4,6 +4,7 @@
 
 # estimating the number of polytopes between a random mnist digit and the
 # classification boundary
+# ======NOTE: this experiment is not completed==================
 
 # =====================
 # Imports

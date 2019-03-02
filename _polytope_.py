@@ -5,6 +5,7 @@ import scipy.optimize as opt
 import matplotlib.pyplot as plt
 from cvxopt import matrix, solvers
 import copy
+import pulp as plp
 
 ##########################################################################
 #                                                                        #
@@ -113,28 +114,32 @@ class Face(Polytope):
         self.interior = None
 
     def check_feasible(self):
-        """ Checks if this polytope is feasible and stores the result"""
+            """ Checks if this polytope is feasible and stores the result"""
 
-        if self.is_feasible is not None:
+            if self.is_feasible is not None:
+                return self.is_feasible
+
+            # Set up feasibility check Linear program
+            c = np.zeros(self.poly_a.shape[1])
+
+            bounds = [[None, None] for _ in c]
+            is_feasible, _ = utils.gurobi_LP(self.poly_a, self.poly_b,
+                                        self.a_eq, self.b_eq, c,
+                                        bounds)
+
+            # bounds = [(None, None) for _ in c]
+            # options = {}; options['tol'] = 1e-6
+            # linprog_result = opt.linprog(c,
+            #                              A_ub=self.poly_a,
+            #                              b_ub=self.poly_b,
+            #                              A_eq=self.a_eq,
+            #                              b_eq=self.b_eq,
+            #                              bounds=bounds,
+            #                              options=options)
+            # is_feasible = (linprog_result.status == 0)
+
+            self.is_feasible = is_feasible
             return self.is_feasible
-
-        # Set up feasibility check Linear program
-        c = np.zeros(self.poly_a.shape[1])
-        tight_indices = np.array(sorted(self.tight_list))
-
-
-        bounds = [(None, None) for _ in c]
-
-        linprog_result = opt.linprog(c,
-                                     A_ub=self.poly_a,
-                                     b_ub=self.poly_b,
-                                     A_eq=self.a_eq,
-                                     b_eq=self.b_eq,
-                                     bounds=bounds)
-        is_feasible = (linprog_result.status == 0)
-
-        self.is_feasible = is_feasible
-        return self.is_feasible
 
     def check_facet(self):
         """ Checks if this polytope is a (n-1) face and stores the result"""
