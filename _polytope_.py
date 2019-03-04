@@ -2,10 +2,8 @@ import utilities as utils
 import torch
 import numpy as np
 import scipy.optimize as opt
-import matplotlib.pyplot as plt
 from cvxopt import matrix, solvers
 import copy
-import pulp as plp
 
 ##########################################################################
 #                                                                        #
@@ -30,12 +28,14 @@ class Polytope(object):
         self.ub_A = utils.as_numpy(ub_A)
         self.ub_b = utils.as_numpy(ub_b)
         self.config = config
+        self.redundant = [None for _ in range(0, len(ub_b))]
 
     def generate_facets(self, check_feasible=False):
         """ Generates all (n-1) dimensional facets of polytope
         """
         num_constraints = self.ub_A.shape[0]
         facets = []
+
         for i in range(num_constraints):
             facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
             if check_feasible:
@@ -44,6 +44,9 @@ class Polytope(object):
 
             if facet.is_facet:
                 facets.append(facet)
+                self.redundant[i] = False
+            else:
+                self.redundant[i] = True
 
         return facets
 
@@ -67,6 +70,9 @@ class Polytope(object):
                 shared_facet_bools = [new_configs_flat == other_config_flat for other_config_flat in seen_polytopes_dict]
                 if not any(shared_facet_bools):
                     facets.append(facet)
+                    self.redundant[i] = False
+                else:
+                    self.redundant[i] = True
 
         return facets
 
@@ -96,9 +102,16 @@ class Polytope(object):
         argmin_0 = np.argmin(dists)[0]
         return dists[argmin_0], argmin_0
 
+    def redund_removal_pgd(self, t, x_0):
+        ''' Removes redundant constraint based on PGD based upper bound 't'
+            on the largest l_p ball from x_0
 
+            modifies:   'self.redundant'
+        '''
 
-
+        potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
+        is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj(x_0)-x_0) >= t)
+        self.redundant = [is_redund(face) for face in potent_faces]
 
 
 class Face(Polytope):
@@ -120,6 +133,7 @@ class Face(Polytope):
                 return self.is_feasible
 
             # Set up feasibility check Linear program
+            # (Gurobi Based Solution)
             c = np.zeros(self.poly_a.shape[1])
 
             bounds = [[None, None] for _ in c]
@@ -127,6 +141,8 @@ class Face(Polytope):
                                         self.a_eq, self.b_eq, c,
                                         bounds)
 
+            # Set up feasibility check Linear program
+            # (Scipy Based Solution)
             # bounds = [(None, None) for _ in c]
             # options = {}; options['tol'] = 1e-6
             # linprog_result = opt.linprog(c,
@@ -209,6 +225,7 @@ class Face(Polytope):
         # if either is not a facet, then return False
         if not (self.check_facet() and other.check_facet()):
             return False
+
         # if they lie in different hyperplanes, then return False
         self_tight = self.tight_list[0]
         self_a = self.poly_a[self_tight, :]
@@ -219,7 +236,6 @@ class Face(Polytope):
         other_b = other.poly_b[other_tight]
 
         return utils.is_same_tight_constraint(self_a, self_b, other_a, other_b)
-
 
 
     def check_same_facet_pg(self, other):
@@ -302,10 +318,11 @@ class Face(Polytope):
             have config hamming distance 1 (plus condition explained below),
             then they are the same facet
 
-            must account for the case where each polytope can be simulatenously
-            glued (not perfectly glued) to more than one hyperplane. two
-            faces can come from polytopes with ReLu hamming distance one
-            and yet their intersection is not a (n-1) dim. face
+            Extra Condtion: must account for the case where two polytopes
+            can be simulatenously glued (not perfectly glued) to the same
+            hyperplane. two faces can come from these polytopes with ReLu
+            hamming distance one and yet their intersection is not a (n-1)
+            dim. face.
         """
         if not (self.check_facet() and other.check_facet()):
             return False
@@ -426,6 +443,21 @@ class Face(Polytope):
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
 
+    def get_hyperplane_proj(self, x_0):
+        """ Finds projection from x_0 onto the hyperplane defined by
+            the object's tight constraints
+        """
+
+        if len(self.tight_list) != 1:
+            raise Exception("Hyperplane projection only implemented \
+                            for (n-1) dim. faces")
+        a = self.a_eq[0]
+        b = self.b_eq[0]
+        x_0 = x_0.reshape(np.shape(a))
+
+        projection = x_0 + (b - np.inner(x_0, a))/np.inner(a, a)*a
+
+        return projection
 
     def get_inequality_constraints(self):
 

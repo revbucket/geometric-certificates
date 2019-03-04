@@ -187,6 +187,16 @@ def as_numpy(tensor_or_array):
 ##########################################################################
 
 def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
+    ''' Solves Linear Program given as a minimization of:
+        min    <c,x>
+        s.t.   (A_ub)^T*x <= b_ub
+               (a_eq)^T*x = b_eq
+                bounds[i][0] <= x_i <= bounds[i][1]     for all i
+
+        Returns:
+                solved: True if correctly solved False o.w.
+                opt_model: pulp object class of optimization prob
+        '''
     m, n = np.shape(A_ub)
     m2, n2 = np.shape(a_eq)
 
@@ -218,9 +228,9 @@ def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
             name="eq_constraint_{0}".format(i)))
 
     plp.GUROBI_CMD(msg=0).solve(opt_model)
-    status = (opt_model.status == 1)    # 1 if solved
+    solved = (opt_model.status == 1)    # 1 if solved
 
-    return status, opt_model
+    return solved, opt_model
 
 
 
@@ -309,18 +319,26 @@ def plot_facets_2d(facet_list, alpha=1.0,
     plt.xlim(xlim[0], xlim[1])
     plt.ylim(ylim[0], ylim[1])
 
-
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots linf norm ball of size t centered at x_0 (only in R^2)
     """
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
-def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
+def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
+
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
+
+
+def plot_hyperplanes(ub_A, ub_b, styles):
+
+    for a, b, style in zip(ub_A, ub_b, styles):
+        m = -a[0]/a[1]
+        intercept = b/a[1]
+        plot_line(m, intercept, style)
 
 
 def get_spaced_colors(n):
@@ -345,6 +363,12 @@ def get_color_dictionary(list):
 
     return color_dict
 
+def plot_line(slope, intercept, style):
+    """Plot a line from slope and intercept"""
+    axes = plt.gca()
+    x_vals = np.array(axes.get_xlim())
+    y_vals = intercept + slope * x_vals
+    plt.plot(x_vals, y_vals, style)
 
 # ------------------------------------
 # Polytope class from PyPi
