@@ -12,6 +12,8 @@ import copy
 #                                                                        #
 ##########################################################################
 
+
+
 def from_polytope_dict(polytope_dict):
     return Polytope(polytope_dict['poly_a'],
                     polytope_dict['poly_b'],
@@ -57,17 +59,24 @@ class Polytope(object):
             facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
             if check_feasible:
                 facet.check_feasible()
-            facet.check_facet()
 
+
+            facet.check_facet()
             if facet.is_facet:
+                # Offloaded to a separate method to help w/ profiling
+                self._if_is_facet(seen_polytopes_dict, net, facet, facets)
                 # Check to see if facet is shared with a seen polytope
-                new_configs = facet.get_new_configs(net)
-                new_configs_flat = utils.flatten_config(new_configs)
-                shared_facet_bools = [new_configs_flat == other_config_flat for other_config_flat in seen_polytopes_dict]
-                if not any(shared_facet_bools):
-                    facets.append(facet)
 
         return facets
+
+    def _if_is_facet(self, seen_polytopes_dict, net, facet, facets):
+        new_configs = facet.get_new_configs(net)
+        new_configs_flat = utils.flatten_config(new_configs)
+        shared_facet_bools = [new_configs_flat == other_config_flat
+                              for other_config_flat in seen_polytopes_dict]
+        if not any(shared_facet_bools):
+            facets.append(facet)
+
 
     def is_point_feasible(self, x):
         """ Returns True if point X satisifies all constraints, false otherwise
@@ -95,8 +104,13 @@ class Polytope(object):
         argmin_0 = np.argmin(dists)[0]
         return dists[argmin_0], argmin_0
 
-
-
+    def to_comparison_form(self, copy=False):
+        """ Converts this A,b into comparison form. If copy is true, returns a
+            new object of this type """
+        comp_A, comp_b = utils.comparison_form(self.ub_A, self.ub_b)
+        self.ub_A = comp_A
+        self.ub_b = comp_b
+        return self
 
 
 

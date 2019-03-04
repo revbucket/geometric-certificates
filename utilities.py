@@ -305,7 +305,7 @@ def get_color_dictionary(list):
 # ------------------------------------
 # Polytope class from PyPi
 # ------------------------------------
-""" Modified class is used for plotting polytopes and utilizing other functions 
+""" Modified class is used for plotting polytopes and utilizing other functions
     from 'polytope' library
 """
 
