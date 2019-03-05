@@ -319,7 +319,7 @@ class Face(Polytope):
         ''' Function takes original ReLu configs and flips the activation of
             the ReLu at index specified in 'tight_boolean_configs'.
         '''
-        #TODO: this could be improved if tight index was consistent with
+        # TODO: this could be improved if tight index was consistent with
         # order of ReLu configs, but it isn't for some reason?
         # Solution: find tight ReLu activation by running interior pt through net
         orig_configs = self.config

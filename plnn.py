@@ -170,6 +170,18 @@ class PLNN(nn.Module):
         poly_out['pre_relus'] = pre_relus
         return poly_out
 
+
+    def compute_matrix(self, configs):
+        M = torch.eye(self.layer_sizes[0])
+
+        for config, fc, layer_size in zip(configs, self.fcs, self.layer_sizes):
+            nullifier = torch.Tensor([config.numpy() for _ in range(0, layer_size)])
+            M_layer_prime = fc.weight * torch.transpose(nullifier, 0, 1)
+            M = torch.matmul(M_layer_prime, M)
+
+        M = torch.matmul(self.fcs[-1].weight, M)
+        return M
+
     def forward_by_layer(self, x):
         pre_relus = []
 
