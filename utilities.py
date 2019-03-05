@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from bitstring import BitArray
 import polytope as ptope
 import matplotlib.patches as patches
+import pulp as plp
 
 
 ##########################################################################
@@ -179,6 +180,59 @@ def as_numpy(tensor_or_array):
         tensor_or_array = tensor_or_array.cpu().detach().numpy()
     return tensor_or_array
 
+##########################################################################
+#                                                                        #
+#                     Optimization Utilities                             #
+#                                                                        #
+##########################################################################
+
+def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
+    ''' Solves Linear Program given as a minimization of:
+        min    <c,x>
+        s.t.   (A_ub)^T*x <= b_ub
+               (a_eq)^T*x = b_eq
+                bounds[i][0] <= x_i <= bounds[i][1]     for all i
+
+        Returns:
+                solved: True if correctly solved False o.w.
+                opt_model: pulp object class of optimization prob
+        '''
+    m, n = np.shape(A_ub)
+    m2, n2 = np.shape(a_eq)
+
+    # Setup Optimization Model
+    opt_model = plp.LpProblem(name="LP program")
+    x_vars = [plp.LpVariable(cat=plp.LpContinuous,
+                             lowBound=bounds[j][0], upBound=bounds[j][1],
+                             name="x_{0}".format(j)) for j in range(0, n)]
+
+    # Set Objective
+    objective = plp.lpDot(x_vars, c)
+    opt_model.sense = plp.LpMinimize
+    opt_model.setObjective(objective)
+
+    # Less than equal constraints
+    for i in range(0, m):
+        opt_model.addConstraint(plp.LpConstraint(
+            e=plp.lpDot(A_ub[i], x_vars),
+            sense=plp.LpConstraintLE,
+            rhs=b_ub[i],
+            name="constraint_{0}".format(i)))
+
+    # Equality Constraints
+    for i in range(0, m2):
+        opt_model.addConstraint(plp.LpConstraint(
+            e=plp.lpDot(a_eq[i], x_vars),
+            sense=plp.LpConstraintEQ,
+            rhs=b_eq[i],
+            name="eq_constraint_{0}".format(i)))
+
+    plp.GUROBI_CMD(msg=0).solve(opt_model)
+    solved = (opt_model.status == 1)    # 1 if solved
+
+    return solved, opt_model
+
+
 
 ##########################################################################
 #                                                                        #
@@ -265,18 +319,26 @@ def plot_facets_2d(facet_list, alpha=1.0,
     plt.xlim(xlim[0], xlim[1])
     plt.ylim(ylim[0], ylim[1])
 
-
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots linf norm ball of size t centered at x_0 (only in R^2)
     """
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
-def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
+def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
+
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
+
+
+def plot_hyperplanes(ub_A, ub_b, styles):
+
+    for a, b, style in zip(ub_A, ub_b, styles):
+        m = -a[0]/a[1]
+        intercept = b/a[1]
+        plot_line(m, intercept, style)
 
 
 def get_spaced_colors(n):
@@ -301,6 +363,12 @@ def get_color_dictionary(list):
 
     return color_dict
 
+def plot_line(slope, intercept, style):
+    """Plot a line from slope and intercept"""
+    axes = plt.gca()
+    x_vals = np.array(axes.get_xlim())
+    y_vals = intercept + slope * x_vals
+    plt.plot(x_vals, y_vals, style)
 
 # ------------------------------------
 # Polytope class from PyPi
@@ -471,4 +539,3 @@ def _get_patch(poly1, **kwargs):
         patch = mpl.patches.Polygon([], True, **kwargs)
         patch.set_zorder(0)
     return patch
-

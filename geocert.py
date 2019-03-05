@@ -114,7 +114,7 @@ class HeapElement(object):
         return self.lp_dist < other.lp_dist
 
 
-def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
+def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1):
     """ Computes l_inf distance to decision boundary in incremental steps of
         expanding the search space
 
@@ -180,9 +180,10 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
             else:
                 print('weve already seen that polytope')
 
-        if(index % 1 == 0 ):
-            geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
-                              x, plot_dir, n_colors, iter=index)
+        if plot_iter is not None:
+            if(index % plot_iter == 0 ):
+                geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
+                                  x, plot_dir, n_colors, iter=index)
         index = index + 1
 
 
@@ -193,7 +194,7 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
     '''
 
     polytope_facets = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
-    print('num facets: ', len(polytope_facets))
+    print('num added facets: ', len(polytope_facets))
 
     polytope_config = utils.flatten_config(polytope.config)
     polytope_adv_constraints = net.make_adversarial_constraints(polytope.config,
