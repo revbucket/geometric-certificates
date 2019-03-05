@@ -166,19 +166,6 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
 
 
 
-##########################################################################
-#                                                                        #
-#                               SAFETY DANCE                             #
-#                                                                        #
-##########################################################################
-
-def as_numpy(tensor_or_array):
-    """ If given a tensor or numpy array returns that object cast numpy array
-    """
-
-    if isinstance(tensor_or_array, torch.Tensor):
-        tensor_or_array = tensor_or_array.cpu().detach().numpy()
-    return tensor_or_array
 
 ##########################################################################
 #                                                                        #
@@ -226,6 +213,8 @@ def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
             sense=plp.LpConstraintEQ,
             rhs=b_eq[i],
             name="eq_constraint_{0}".format(i)))
+
+    print(opt_model)
 
     plp.GUROBI_CMD(msg=0).solve(opt_model)
     solved = (opt_model.status == 1)    # 1 if solved
@@ -479,7 +468,19 @@ def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
     if (legend_flag):
         plt.legend()
 
+##########################################################################
+#                                                                        #
+#                               SAFETY DANCE                             #
+#                                                                        #
+##########################################################################
 
+def as_numpy(tensor_or_array):
+    """ If given a tensor or numpy array returns that object cast numpy array
+    """
+
+    if isinstance(tensor_or_array, torch.Tensor):
+        tensor_or_array = tensor_or_array.cpu().detach().numpy()
+    return tensor_or_array
 
 ##########################################################################
 #                                                                        #

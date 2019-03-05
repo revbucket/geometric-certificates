@@ -102,17 +102,38 @@ class Polytope(object):
         argmin_0 = np.argmin(dists)[0]
         return dists[argmin_0], argmin_0
 
-    def redund_removal_pgd(self, t, x_0):
+    def redund_removal_pgd_l2(self, t, x_0):
         ''' Removes redundant constraint based on PGD based upper bound 't'
-            on the largest l_p ball from x_0
+            on the largest l_2 ball from x_0
 
             modifies:   'self.redundant'
         '''
 
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
+        is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj_2(x_0)-x_0) >= t)
+        self.redundant = [is_redund(face) for face in potent_faces]
+
+    def redund_removal_ellipse(self):
+        ''' Removes redundant constraint by finding an approximation to the
+            minimum volume circumscribing ellipsoid. Done by solving maximum
+            volume inscribed ellipsoid and multiplying by dimenion n
+
+            modifies:   'self.redundant'
+        '''
+
+        # Find min. vol. inscribed ellipse
+
+        # Approximate max. vol. circum. ellipse
+
+        # Remove Redundant constraints
+
+        potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
         is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj(x_0)-x_0) >= t)
         self.redundant = [is_redund(face) for face in potent_faces]
 
+    def MVIE(self):
+
+        return P
 
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
@@ -443,8 +464,8 @@ class Face(Polytope):
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
 
-    def get_hyperplane_proj(self, x_0):
-        """ Finds projection from x_0 onto the hyperplane defined by
+    def get_hyperplane_proj_l2(self, x_0):
+        """ Finds l_2 projection from x_0 onto the hyperplane defined by
             the object's tight constraints
         """
 
@@ -456,6 +477,14 @@ class Face(Polytope):
         x_0 = x_0.reshape(np.shape(a))
 
         projection = x_0 + (b - np.inner(x_0, a))/np.inner(a, a)*a
+
+        return projection
+
+    def get_hyperplane_proj_ellip(self, P, x_0):
+        """ Finds projection from x_0 onto the hyperplane defined by
+            the object's tight constraints w.r.t. ellipsoidal norm
+            defined by P (PSD matrix s.t. P*u ||u||<=1 defines ellipse)
+        """
 
         return projection
 
