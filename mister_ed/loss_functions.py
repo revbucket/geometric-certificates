@@ -280,7 +280,6 @@ class CWLossF6(PartialLoss):
         else:
             # in NONtargeted case, want to make NONtarget most likely
             f6 = torch.clamp(target_logits - max_other, min=-1 * self.kappa)
-
         return f6.squeeze()
 
     def switch_model(self, new_classifier, new_normalizer=None):
@@ -454,7 +453,7 @@ class L2Regularization(ReferenceRegularizer):
         l2_dist = img_utils.nchw_l2(examples, self.fix_im,
                                     squared=False).view(-1, 1)
         l2_dist = l2_dist / self.fix_im_numel
-        return l2_dist.squeeze()
+        return l2_dist.squeeze(dim=1)
 
 #############################################################################
 #                         LPIPS PERCEPTUAL REGULARIZATION                   #

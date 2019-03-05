@@ -474,8 +474,6 @@ class CarliniWagner(AdversarialAttack):
         super(CarliniWagner, self).__init__(classifier_net, normalizer,
                                             threat_model, manual_gpu=manual_gpu)
 
-        print("DIST", distance_fxn, issubclass(distance_fxn, lf.ReferenceRegularizer),
-              lf.ReferenceRegularizer)
         assert (issubclass(distance_fxn, lf.ReferenceRegularizer) or
                 distance_fxn == lf.PerturbationNormLoss)
         assert issubclass(carlini_loss, lf.CWLossF6)
@@ -661,14 +659,9 @@ class CarliniWagner(AdversarialAttack):
         ######################################################################
         #   Now start the binary search                                      #
         ######################################################################
-        var_scale_lo = Variable(torch.zeros(num_examples)\
-                                .type(self._dtype).squeeze())
-
-
-        var_scale = Variable(torch.ones(num_examples, 1).type(self._dtype) *
-                             initial_lambda).squeeze()
-        var_scale_hi = Variable(torch.ones(num_examples).type(self._dtype)
-                                * 256).squeeze() # HARDCODED UPPER LIMIT
+        var_scale_lo = torch.zeros(num_examples).type(self._dtype)
+        var_scale = torch.ones(num_examples).type(self._dtype) * initial_lambda
+        var_scale_hi = torch.ones(num_examples).type(self._dtype) * 256 # HARDCODED UPPER LIMIT
 
 
         for bin_search_step in range(num_bin_search_steps):
@@ -735,8 +728,8 @@ class CarliniWagner(AdversarialAttack):
             # And then generate a new 'best distance' and 'best perturbation'
 
             best_results['best_dist'] = utils.fold_mask(batch_dists,
-                                                      best_results['best_dist'],
-                                                      successful_mask)
+                                                        best_results['best_dist'],
+                                                        successful_mask)
 
             best_results['best_perturbation'] =\
                  perturbation.merge_perturbation(

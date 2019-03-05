@@ -48,18 +48,26 @@ class Polytope(object):
 
         return facets
 
-    def generate_facets_configs(self, seen_polytopes_dict, net, check_feasible=False):
+    def generate_facets_configs(self, seen_polytopes_dict, net, check_feasible=False,
+                                upper_bound_dict=None):
         """ Generates all (n-1) dimensional facets of polytope which aren't
             shared with other polytopes in list. (for ReLu nets)
         """
 
         num_constraints = self.ub_A.shape[0]
         facets = []
+        infeasibles = []
         for i in range(num_constraints):
             facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
+
+            if upper_bound_dict is not None:
+                if facet.reject_via_upper_bound(upper_bound_dict):
+                    continue
+
             if check_feasible:
                 facet.check_feasible()
-
+            if not facet.is_feasible:
+                infeasibles.append(facet)
 
             facet.check_facet()
             if facet.is_facet:
@@ -67,7 +75,7 @@ class Polytope(object):
                 self._if_is_facet(seen_polytopes_dict, net, facet, facets)
                 # Check to see if facet is shared with a seen polytope
 
-        return facets
+        return facets, infeasibles
 
     def _if_is_facet(self, seen_polytopes_dict, net, facet, facets):
         new_configs = facet.get_new_configs(net)
@@ -76,6 +84,7 @@ class Polytope(object):
                               for other_config_flat in seen_polytopes_dict]
         if not any(shared_facet_bools):
             facets.append(facet)
+
 
 
     def is_point_feasible(self, x):
@@ -434,6 +443,32 @@ class Face(Polytope):
         else:
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
+
+
+    def l2_projection(self, x, lp_norm):
+        """ Computes the l2 distance between point x and the hyperplane that
+            this face lies on. Serves as a lower bound to the l2 distance
+            {y | <a,y> =b}.
+            This is equivalent to (b - <a,x>)/ ||a||_*
+            for ||.||_* being the dual norm
+        """
+        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
+
+        eq_a = self.a_eq
+        eq_b = self.b_eq
+        return (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a, ord=dual_norm)
+
+    def reject_via_upper_bound(self, upper_bound_dict):
+        """ Takes in a dict w/ keys:
+            {'upper_bound': float of upper bound of dist to decision bound,
+             'x': point we're verifying robustness for,
+             'norm': ['l_2'| 'l_inf'], which norm we care about}
+
+            Returns TRUE if we can reject this facet, FALSE O.w.
+        """
+        proj = self.l2_projection(upper_bound_dict['x'],
+                                  upper_bound_dict['lp_norm'])
+        return proj > upper_bound_dict['upper_bound']
 
 
     def get_inequality_constraints(self):

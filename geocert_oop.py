@@ -1,6 +1,13 @@
 """  OOP refactor of geocert so I get a better feel for how the ICML
     implementation went -mj (3/1/19)
 """
+import sys
+sys.path.append('mister_ed')
+import adversarial_perturbations as ap
+import prebuilt_loss_functions as plf
+import loss_functions as lf
+import adversarial_attacks as aa
+import utils.pytorch_utils as me_utils
 
 from _polytope_ import Polytope, Face, from_polytope_dict
 import utilities as utils
@@ -8,6 +15,8 @@ import torch
 import numpy as np
 import heapq
 import matplotlib.pyplot as plt
+
+
 
 ##############################################################################
 #                                                                            #
@@ -163,11 +172,20 @@ class IncrementalGeoCert(object):
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
+        self.upper_bound = None
 
 
     def _verbose_print(self, *args):
         if self.verbose:
             print(*args)
+
+
+    def _carlini_wagner_l2_upper(self, x):
+        l2_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
+                                                      'lp_bound': 1.0})
+        normalizer = utils.IdentityNormalize
+
+
 
     def _update_step(self, poly, popped_facet):
         """ Given the next polytope from the popped heap, does the following:
@@ -184,8 +202,15 @@ class IncrementalGeoCert(object):
         """
 
         # Step 1) Get the new facets, check their feasibility and keep track
-        new_facets = poly.generate_facets_configs(self.seen_to_polytope_map,
-                                                  self.net, check_feasible=True)
+        upper_bound_dict = None
+        if self.upper_bound is not None:
+            upper_bound_dict = {'upper_bound': self.upper_bound,
+                                'x': self.x,
+                                'lp_norm': self.lp_norm}
+
+        new_facets, infeasibles = poly.generate_facets_configs(self.seen_to_polytope_map,
+                                                      self.net, check_feasible=True,
+                                                      upper_bound_dict=upper_bound_dict)
         self._verbose_print("Num facets: ", len(new_facets))
 
 
@@ -214,7 +239,7 @@ class IncrementalGeoCert(object):
                                   exact_or_estimate='exact')
             heapq.heappush(self.pq, heap_el)
 
-    def min_dist(self, x, lp_norm='l_2'):
+    def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
         """ Returns the minimum distance between x and the decision boundary.
             Plots things too, I guess...
         """
@@ -236,6 +261,45 @@ class IncrementalGeoCert(object):
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
+        self.upper_bound = None
+
+        #####################################################################
+        #   Step 0b: If compute upper bound, compute the upper bound radius #
+        #####################################################################
+
+        upper_bound_dist = None
+        if compute_upper_bound:
+            # Do a carlini wagner L2 and if it's successful we have a great
+            # upper bound!
+            if lp_norm == 'l_2':
+                delta_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
+                                                                 'lp_bound': 1.0})
+                normalizer = me_utils.IdentityNormalize()
+                distance_fxn = lf.L2Regularization
+                carlini_loss = lf.CWLossF6
+                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss)
+                attack_kwargs = {'warm_start': True,
+                                 'num_optim_steps': 1000,
+                                 'num_bin_search_steps': 3,
+                                 'initial_lambda': 100.0,
+                                 'verbose': False}
+
+                pert_out = cwl2_attack.attack(x.view(1, -1), torch.Tensor([self.true_label]).long(),
+                                              **attack_kwargs)
+                success_out = pert_out.collect_successful(self.net, normalizer,
+                                                  success_def='alter_top_logit')
+
+
+                if success_out['success_idxs'].item() == 0:
+
+                    self.upper_bound = (success_out['adversarials'].squeeze(0) -
+                                        torch.Tensor(x).view(1, -1)).norm().item()
+                    self._verbose_print("CWL2 found an upper bound of:",
+                                        self.upper_bound)
+
+
+
+
 
 
         ######################################################################
