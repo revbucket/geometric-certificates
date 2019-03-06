@@ -21,14 +21,11 @@ class Polytope(object):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
 
-        if isinstance(ub_A, torch.Tensor):
-            ub_A = ub_A.cpu().detach().numpy()
-        if isinstance(ub_b, torch.Tensor):
-            ub_b = ub_b.cpu().detach().numpy()
         self.ub_A = utils.as_numpy(ub_A)
         self.ub_b = utils.as_numpy(ub_b)
         self.config = config
         self.redundant = [None for _ in range(0, len(ub_b))]
+        self.m, self.n = np.shape(ub_A)
 
     def generate_facets(self, check_feasible=False):
         """ Generates all (n-1) dimensional facets of polytope
@@ -85,7 +82,6 @@ class Polytope(object):
         return all(bools)
 
 
-
     def linf_dist(self, x):
         """ Takes a feasible point x and returns the minimum l_inf distance to
             a boundary point of the polytope.
@@ -104,11 +100,13 @@ class Polytope(object):
 
     def redund_removal_pgd_l2(self, t, x_0):
         ''' Removes redundant constraint based on PGD based upper bound 't'
-            on the largest l_2 ball from x_0
+            on the largest l_2 ball from initial point x_0
 
             modifies:   'self.redundant'
         '''
 
+        # Remove Redundant constraints
+        # (constraint a_i redundant if ||projection(x_0, a_i)-x_0||_2 >= t
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
         is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj_2(x_0)-x_0) >= t)
         self.redundant = [is_redund(face) for face in potent_faces]
@@ -116,24 +114,31 @@ class Polytope(object):
     def redund_removal_ellipse(self):
         ''' Removes redundant constraint by finding an approximation to the
             minimum volume circumscribing ellipsoid. Done by solving maximum
-            volume inscribed ellipsoid and multiplying by dimenion n
+            volume inscribed ellipsoid and multiplying by dimenion n. Ellipse
+            E(P, c) is defined by Pos. Def. matrix P and center c.
 
             modifies:   'self.redundant'
         '''
 
         # Find min. vol. inscribed ellipse
+        P, c = utils.MVIE_ellipse(self.ub_A, self.ub_b)
 
         # Approximate max. vol. circum. ellipse
+        P = np.multiply(self.n, P)
 
         # Remove Redundant constraints
+        # constraint a_i redundant if below holds:
+        # max <a_i, y> <= b_i for all y in E(P, c))
+        #
+        # equivalent to: ||P.T*a_i||_2 + a_i.T*c <= b_i
+        # (max has a closed form)
 
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
-        is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj(x_0)-x_0) >= t)
-        self.redundant = [is_redund(face) for face in potent_faces]
+        # is_redund = lambda face, i: (np.linalg.norm(np.matmul(P.T, face.ub_A[i].T)+np.dot(face.ub_A[i], c)) <= face.ub_b[i])
+        is_redund = lambda face, i: (np.sqrt(np.matmul(face.ub_A[i], np.matmul(P, face.ub_A[i].T))+np.dot(face.ub_A[i], c)) <= face.ub_b[i])
 
-    def MVIE(self):
+        self.redundant = [is_redund(face, face.tight_list) for face in potent_faces]
 
-        return P
 
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
@@ -477,14 +482,6 @@ class Face(Polytope):
         x_0 = x_0.reshape(np.shape(a))
 
         projection = x_0 + (b - np.inner(x_0, a))/np.inner(a, a)*a
-
-        return projection
-
-    def get_hyperplane_proj_ellip(self, P, x_0):
-        """ Finds projection from x_0 onto the hyperplane defined by
-            the object's tight constraints w.r.t. ellipsoidal norm
-            defined by P (PSD matrix s.t. P*u ||u||<=1 defines ellipse)
-        """
 
         return projection
 

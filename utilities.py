@@ -164,7 +164,111 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
     # check if a1 approx = a2 and b1 approx = b2
     return fuzzy_vector_equal(a1, a2, tolerance=tolerance) and fuzzy_equal(b1, b2, tolerance=tolerance)
 
+##########################################################################
+#                                                                        #
+#                     Geometric Utilities                                #
+#                                                                        #
+##########################################################################
 
+from mosek.fusion import *
+import sys
+
+'''
+Models the convex set 
+
+  S = { (x, t) \in R^n x R | x >= 0, t <= (x1 * x2 * ... * xn)^(1/n) }
+
+using three-dimensional power cones
+'''
+def geometric_mean(M, x, t):
+    n = int(x.getSize())
+    if n==1:
+      M.constraint(Expr.sub(t, x), Domain.lessThan(0.0))
+    else:
+      t2 = M.variable()
+      M.constraint(Var.hstack(t2, x.index(n-1), t), Domain.inPPowerCone(1-1.0/n))
+      geometric_mean(M, x.slice(0,n-1), t2)
+
+
+'''
+ Purpose: Models the hypograph of the n-th power of the
+ determinant of a positive definite matrix. See [1,2] for more details.
+
+   The convex set (a hypograph)
+
+   C = { (X, t) \in S^n_+ x R |  t <= det(X)^{1/n} },
+
+   can be modeled as the intersection of a semidefinite cone
+
+   [ X, Z; Z^T Diag(Z) ] >= 0  
+
+   and a number of rotated quadratic cones and affine hyperplanes,
+
+   t <= (Z11*Z22*...*Znn)^{1/n}  (see geometric_mean).
+'''
+def det_rootn(M, t, n):
+    # Setup variables
+    Y = M.variable(Domain.inPSDCone(2 * n))
+
+    # Setup Y = [X, Z; Z^T , diag(Z)]
+    X   = Y.slice([0, 0], [n, n])
+    Z   = Y.slice([0, n], [n, 2 * n])
+    DZ  = Y.slice([n, n], [2 * n, 2 * n])
+
+    # Z is lower-triangular
+    M.constraint(Z.pick([[i,j] for i in range(n) for j in range(i+1,n)]), Domain.equalsTo(0.0))
+    # DZ = Diag(Z)
+    M.constraint(Expr.sub(DZ, Expr.mulElm(Z, Matrix.eye(n))), Domain.equalsTo(0.0))
+
+    # t^n <= (Z11*Z22*...*Znn)
+    geometric_mean(M, DZ.diag(), t)
+
+    # Return an n x n PSD variable which satisfies t <= det(X)^(1/n)
+    return X
+
+'''
+  The inner ellipsoidal approximation to a polytope 
+
+     S = { x \in R^n | Ax < b }.
+
+  maximizes the volume of the inscribed ellipsoid,
+
+     { x | x = C*u + d, || u ||_2 <= 1 }.
+
+  The volume is proportional to det(C)^(1/n), so the
+  problem can be solved as 
+
+    maximize         t
+    subject to       t       <= det(C)^(1/n)
+                || C*ai ||_2 <= bi - ai^T * d,  i=1,...,m
+                C is PSD
+
+  which is equivalent to a mixed conic quadratic and semidefinite
+  programming problem.
+'''
+def MVIE_ellipse(A, b):
+    A = A.tolist()
+    b = b.tolist()
+    with Model("lownerjohn_inner") as M:
+        # M.setLogHandler(sys.stdout)   # output of solver
+        m, n = len(A), len(A[0])
+
+        # Setup variables
+        t = M.variable("t", 1, Domain.greaterThan(0.0))
+        C = det_rootn(M, t, n)
+        d = M.variable("d", n, Domain.unbounded())
+
+        # (b-Ad, AC) generate cones
+        M.constraint("qc", Expr.hstack(Expr.sub(b, Expr.mul(A, d)), Expr.mul(A, C)),
+                     Domain.inQCone())
+
+        # Objective: Maximize t
+        M.objective(ObjectiveSense.Maximize, t)
+
+        M.solve()
+
+        C, d = C.level(), d.level()
+        return ([C[i:i + n] for i in range(0, n * n, n)], d)
 
 
 ##########################################################################
@@ -322,12 +426,12 @@ def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     ax.add_artist(circle)
 
 
-def plot_hyperplanes(ub_A, ub_b, styles):
+def plot_hyperplanes(ub_A, ub_b, styles, ax=plt.axes()):
 
     for a, b, style in zip(ub_A, ub_b, styles):
         m = -a[0]/a[1]
         intercept = b/a[1]
-        plot_line(m, intercept, style)
+        plot_line(m, intercept, style, ax)
 
 
 def get_spaced_colors(n):
@@ -352,12 +456,12 @@ def get_color_dictionary(list):
 
     return color_dict
 
-def plot_line(slope, intercept, style):
+def plot_line(slope, intercept, style, ax=plt.axes()):
     """Plot a line from slope and intercept"""
     axes = plt.gca()
     x_vals = np.array(axes.get_xlim())
     y_vals = intercept + slope * x_vals
-    plt.plot(x_vals, y_vals, style)
+    ax.plot(x_vals, y_vals, style)
 
 # ------------------------------------
 # Polytope class from PyPi
@@ -467,6 +571,13 @@ def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
     print('num_unique_activations', len(unique_bin_acts))
     if (legend_flag):
         plt.legend()
+
+def expand_xylim(alpha, xlim, ylim=None):
+    if ylim is None:
+        ylim = xlim
+    expander = lambda lim, alpha: [elem - np.power(-1, i)*alpha*np.abs(lim[1]-lim[0]) for i, elem in enumerate(lim)]
+
+    return expander(xlim, alpha), expander(ylim, alpha)
 
 ##########################################################################
 #                                                                        #
