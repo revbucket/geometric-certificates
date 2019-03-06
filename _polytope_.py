@@ -462,13 +462,38 @@ class Face(Polytope):
         """ Takes in a dict w/ keys:
             {'upper_bound': float of upper bound of dist to decision bound,
              'x': point we're verifying robustness for,
-             'norm': ['l_2'| 'l_inf'], which norm we care about}
+             'norm': ['l_2'| 'l_inf'], which norm we care about
+             (optional) 'hypercube': [lo, hi] If present, describes
+                         the dimension of the [lo,hi]^n hypercube that is the
+                         domain of our problem
 
             Returns TRUE if we can reject this facet, FALSE O.w.
         """
-        proj = self.l2_projection(upper_bound_dict['x'],
-                                  upper_bound_dict['lp_norm'])
-        return proj > upper_bound_dict['upper_bound']
+        lp_norm = upper_bound_dict['lp_norm']
+        x = upper_bound_dict['x']
+        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
+        eq_a = self.a_eq
+        eq_b = self.b_eq.item()
+        proj = (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a, ord=dual_norm)
+
+        if proj > upper_bound_dict['upper_bound']:
+            return True
+
+        if 'hypercube' in upper_bound_dict:
+            lo, hi = upper_bound_dict['hypercube']
+            central_point = np.ones_like(x.cpu().numpy()) * ((lo + hi) / 2.0)
+            overshot = -1 if (np.matmul(eq_a, central_point).item() >= eq_b) else 1
+            corner_signs = (np.sign(eq_a) * overshot).T
+            corner = central_point + corner_signs * (lo + hi) / 2.0
+            overshot_2 = -1 if (np.matmul(eq_a, corner).item() >= eq_b) else 1
+            return overshot == overshot_2
+
+        return False
+
+
+
+
+
 
 
     def get_inequality_constraints(self):

@@ -206,7 +206,8 @@ class IncrementalGeoCert(object):
         if self.upper_bound is not None:
             upper_bound_dict = {'upper_bound': self.upper_bound,
                                 'x': self.x,
-                                'lp_norm': self.lp_norm}
+                                'lp_norm': self.lp_norm,
+                                'hypercube': [0.0, 1.0]}
 
         new_facets, infeasibles = poly.generate_facets_configs(self.seen_to_polytope_map,
                                                       self.net, check_feasible=True,
@@ -278,10 +279,10 @@ class IncrementalGeoCert(object):
                 distance_fxn = lf.L2Regularization
                 carlini_loss = lf.CWLossF6
                 cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss)
-                attack_kwargs = {'warm_start': True,
-                                 'num_optim_steps': 1000,
-                                 'num_bin_search_steps': 3,
-                                 'initial_lambda': 100.0,
+                attack_kwargs = {'warm_start': False,
+                                 'num_optim_steps': 2000,
+                                 'num_bin_search_steps': 5,
+                                 'initial_lambda': 10.0,
                                  'verbose': False}
 
                 pert_out = cwl2_attack.attack(x.view(1, -1), torch.Tensor([self.true_label]).long(),
@@ -290,12 +291,14 @@ class IncrementalGeoCert(object):
                                                   success_def='alter_top_logit')
 
 
-                if success_out['success_idxs'].item() == 0:
+                if success_out['success_idxs'].numel() > 0:
 
                     self.upper_bound = (success_out['adversarials'].squeeze(0) -
                                         torch.Tensor(x).view(1, -1)).norm().item()
                     self._verbose_print("CWL2 found an upper bound of:",
                                         self.upper_bound)
+                else:
+                    self._verbose_print("CWL2 failed to find an upper bound")
 
 
 
@@ -320,13 +323,14 @@ class IncrementalGeoCert(object):
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
                 self._verbose_print('----------Minimal Projection Generated----------')
-                self.plot_2d(pop_el.lp_dist, iter=index)
+                if self.display:
+                    self.plot_2d(pop_el.lp_dist, iter=index)
                 return pop_el.lp_dist
 
             # Otherwise, open up a new polytope and explore
             else:
                 self._verbose_print('---Opening New Polytope---')
-
+                self._verbose_print('Lower bound is ', pop_el.lp_dist)
                 popped_facet = pop_el.facet
                 configs = popped_facet.get_new_configs(self.net)
                 configs_flat = utils.flatten_config(configs)
