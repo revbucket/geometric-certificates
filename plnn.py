@@ -41,7 +41,7 @@ class PLNN(nn.Module):
         del layers[str(num-1)]      # No ReLU for the last layer
 
         net = nn.Sequential(layers).type(self.dtype)
-        print(net)
+        print(self.layer_sizes)
 
         return net
 

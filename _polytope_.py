@@ -151,6 +151,7 @@ class Polytope(object):
                 self.redundant[face.tight_list[0]] = True
 
 
+
     def essential_constraints_ellipse(self):
         ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
             at the boundary of the ellipse + projecting onto constraint from point if not tight
@@ -168,7 +169,6 @@ class Polytope(object):
         # y^* = P.T*a_i/||P.T*a_i||_2
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
 
-        diffs = []
         for face in potent_faces:
             project = np.matmul(P.T, face.ub_A[face.tight_list].T)
             project = project/np.linalg.norm(np.matmul(P.T, face.ub_A[face.tight_list].T))
@@ -179,25 +179,7 @@ class Polytope(object):
             if utils.fuzzy_equal(lhs, rhs, tolerance=1e-6):
                 self.redundant[face.tight_list[0]] = False
 
-            diffs.append(abs(lhs-rhs))
 
-        nums = []
-
-        tols = [elem for elem in np.logspace(-8, -6, 5)]
-        for tol in tols:
-            num = 0
-            for diff in diffs:
-                if diff <= tol:
-                    num+=1
-            nums.append(num)
-
-        print(tols)
-        print(nums)
-        fig, ax = plt.axes()
-        utils.plot_polytopes_2d([self,], ax=ax)
-        utils.plot_ellipse(P, c, ax)
-        plt.autoscale()
-        plt.show()
 
 
 
