@@ -54,7 +54,7 @@ def flatten_config(config):
 #                                                                            #
 ##############################################################################
 
-global_tolerance = 1e-4
+global_tolerance = 1e-6
 
 def comparison_form(A, b, tolerance=global_tolerance):
     """ Given polytope Ax<= b
@@ -171,7 +171,6 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
 ##########################################################################
 
 from mosek.fusion import *
-import sys
 
 '''
 Models the convex set 
@@ -462,6 +461,12 @@ def plot_line(slope, intercept, style, ax=plt.axes()):
     x_vals = np.array(axes.get_xlim())
     y_vals = intercept + slope * x_vals
     ax.plot(x_vals, y_vals, style)
+
+def plot_ellipse(P, c, ax=plt.axes()):
+    theta = np.linspace(0, 2 * np.pi, 100)
+    x = P[0][0] * np.cos(theta) + P[0][1] * np.sin(theta) + c[0]
+    y = P[1][0] * np.cos(theta) + P[1][1] * np.sin(theta) + c[1]
+    ax.plot(x, y)
 
 # ------------------------------------
 # Polytope class from PyPi

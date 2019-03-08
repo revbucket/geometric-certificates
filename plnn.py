@@ -150,8 +150,8 @@ class PLNN(nn.Module):
             a_stack.append(j.matmul(wk))
             b_stack.append(-j.matmul(bk))
 
-        polytope_A = torch.cat(a_stack, dim=0).detach().numpy()
-        polytope_b = torch.cat(b_stack, dim=0).detach().numpy()
+        polytope_A = utils.as_numpy(torch.cat(a_stack, dim=0))
+        polytope_b = utils.as_numpy(torch.cat(b_stack, dim=0))
 
         if(comparison_form_flag):
             polytope_A, polytope_b = utils.comparison_form(polytope_A, polytope_b)

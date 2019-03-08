@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 # Batched algorithm is when the union of polytopes is specified beforehand
 
-def batch_GeoCert(polytope_list, x, norm='inf', comp_method='slow'):
+def batch_GeoCert(polytope_list, x, norm='l_2', comp_method='slow'):
     """ Computes the linf distance from x to the boundary of the union of polytopes
 
         Norm options: {inf | 2}
@@ -36,6 +36,8 @@ def batch_GeoCert(polytope_list, x, norm='inf', comp_method='slow'):
         dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
     elif norm == 'l_2':
         dist_to_boundary = [facet.l2_dist(x) for facet in boundary]
+    else:
+        raise NotImplementedError
 
     return min(dist_to_boundary), boundary, shared_facets
 

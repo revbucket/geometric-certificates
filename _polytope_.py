@@ -4,6 +4,7 @@ import numpy as np
 import scipy.optimize as opt
 from cvxopt import matrix, solvers
 import copy
+import matplotlib.pyplot as plt
 
 ##########################################################################
 #                                                                        #
@@ -109,9 +110,13 @@ class Polytope(object):
         # (constraint a_i redundant if ||projection(x_0, a_i)-x_0||_2 >= t
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
         is_redund = lambda face: (np.linalg.norm(face.get_hyperplane_proj_2(x_0)-x_0) >= t)
-        self.redundant = [is_redund(face) for face in potent_faces]
 
-    def redund_removal_ellipse(self):
+        for face in potent_faces:
+            if is_redund(face):
+                self.redundant[face.tight_list[0]] = True
+
+
+    def redund_removal_approx_ellipse(self):
         ''' Removes redundant constraint by finding an approximation to the
             minimum volume circumscribing ellipsoid. Done by solving maximum
             volume inscribed ellipsoid and multiplying by dimenion n. Ellipse
@@ -122,9 +127,13 @@ class Polytope(object):
 
         # Find min. vol. inscribed ellipse
         P, c = utils.MVIE_ellipse(self.ub_A, self.ub_b)
+        P = np.asarray(P)
+        c = np.asarray(c)
 
-        # Approximate max. vol. circum. ellipse
+
+        # Approximate max. vol. circum. ellipse (provable bounds polytope)
         P = np.multiply(self.n, P)
+
 
         # Remove Redundant constraints
         # constraint a_i redundant if below holds:
@@ -134,10 +143,62 @@ class Polytope(object):
         # (max has a closed form)
 
         potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
-        # is_redund = lambda face, i: (np.linalg.norm(np.matmul(P.T, face.ub_A[i].T)+np.dot(face.ub_A[i], c)) <= face.ub_b[i])
-        is_redund = lambda face, i: (np.sqrt(np.matmul(face.ub_A[i], np.matmul(P, face.ub_A[i].T))+np.dot(face.ub_A[i], c)) <= face.ub_b[i])
 
-        self.redundant = [is_redund(face, face.tight_list) for face in potent_faces]
+        for face in potent_faces:
+            lhs = np.linalg.norm(np.matmul(P.T, face.ub_A[face.tight_list].T))+np.dot(face.ub_A[face.tight_list], c)
+            rhs = face.ub_b[face.tight_list]
+            if lhs <= rhs:
+                self.redundant[face.tight_list[0]] = True
+
+
+    def essential_constraints_ellipse(self):
+        ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
+            at the boundary of the ellipse + projecting onto constraint from point if not tight
+
+            modifies:   'self.redundant'
+        '''
+
+        # Find min. vol. inscribed ellipse
+        P, c = utils.MVIE_ellipse(self.ub_A, self.ub_b)
+        P = np.asarray(P)
+        c = np.asarray(c)
+
+        # Find non-Redundant constraints
+        # solving: max <a_i, y> <= b_i for all y in E(P, c))
+        # y^* = P.T*a_i/||P.T*a_i||_2
+        potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
+
+        diffs = []
+        for face in potent_faces:
+            project = np.matmul(P.T, face.ub_A[face.tight_list].T)
+            project = project/np.linalg.norm(np.matmul(P.T, face.ub_A[face.tight_list].T))
+
+            lhs = np.linalg.norm(np.matmul(P.T, face.ub_A[face.tight_list].T))+np.dot(face.ub_A[face.tight_list], c)
+            rhs = face.ub_b[face.tight_list]
+
+            if utils.fuzzy_equal(lhs, rhs, tolerance=1e-6):
+                self.redundant[face.tight_list[0]] = False
+
+            diffs.append(abs(lhs-rhs))
+
+        nums = []
+
+        tols = [elem for elem in np.logspace(-8, -6, 5)]
+        for tol in tols:
+            num = 0
+            for diff in diffs:
+                if diff <= tol:
+                    num+=1
+            nums.append(num)
+
+        print(tols)
+        print(nums)
+        fig, ax = plt.axes()
+        utils.plot_polytopes_2d([self,], ax=ax)
+        utils.plot_ellipse(P, c, ax)
+        plt.autoscale()
+        plt.show()
+
 
 
 class Face(Polytope):
@@ -158,27 +219,28 @@ class Face(Polytope):
             if self.is_feasible is not None:
                 return self.is_feasible
 
-            # Set up feasibility check Linear program
-            # (Gurobi Based Solution)
-            c = np.zeros(self.poly_a.shape[1])
-
-            bounds = [[None, None] for _ in c]
-            is_feasible, _ = utils.gurobi_LP(self.poly_a, self.poly_b,
-                                        self.a_eq, self.b_eq, c,
-                                        bounds)
+            # # Set up feasibility check Linear program
+            # # (Gurobi Based Solution)
+            # c = np.zeros(self.poly_a.shape[1])
+            #
+            # bounds = [[None, None] for _ in c]
+            # is_feasible, _ = utils.gurobi_LP(self.poly_a, self.poly_b,
+            #                             self.a_eq, self.b_eq, c,
+            #                             bounds)
 
             # Set up feasibility check Linear program
             # (Scipy Based Solution)
-            # bounds = [(None, None) for _ in c]
-            # options = {}; options['tol'] = 1e-6
-            # linprog_result = opt.linprog(c,
-            #                              A_ub=self.poly_a,
-            #                              b_ub=self.poly_b,
-            #                              A_eq=self.a_eq,
-            #                              b_eq=self.b_eq,
-            #                              bounds=bounds,
-            #                              options=options)
-            # is_feasible = (linprog_result.status == 0)
+            c = np.zeros(self.poly_a.shape[1])
+            bounds = [(None, None) for _ in c]
+            options = {}; options['tol'] = 1e-6
+            linprog_result = opt.linprog(c,
+                                         A_ub=self.poly_a,
+                                         b_ub=self.poly_b,
+                                         A_eq=self.a_eq,
+                                         b_eq=self.b_eq,
+                                         bounds=bounds,
+                                         options=options)
+            is_feasible = (linprog_result.status == 0)
 
             self.is_feasible = is_feasible
             return self.is_feasible
