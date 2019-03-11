@@ -4,6 +4,7 @@ import numpy as np
 import scipy.optimize as opt
 from cvxopt import matrix, solvers
 import copy
+from dikin_walk import collect_chain, dikin_walk, chebyshev_center
 import matplotlib.pyplot as plt
 
 ##########################################################################
@@ -82,6 +83,13 @@ class Polytope(object):
 
         return all(bools)
 
+    def is_point_fesible_plus(self, x):
+        """ Same as above, but also returns extra information
+        """
+        lhs = np.matmul(self.ub_A, x)
+        bools = [lhs.reshape((lhs.size,)) <= self.ub_b][0]
+
+        return all(bools), bools
 
     def linf_dist(self, x):
         """ Takes a feasible point x and returns the minimum l_inf distance to
@@ -167,7 +175,7 @@ class Polytope(object):
         # Find non-Redundant constraints
         # solving: max <a_i, y> <= b_i for all y in E(P, c))
         # y^* = P.T*a_i/||P.T*a_i||_2
-        potent_faces = [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
+        potent_faces = self.get_potent_facets()
 
         for face in potent_faces:
             project = np.matmul(P.T, face.ub_A[face.tight_list].T)
@@ -180,8 +188,37 @@ class Polytope(object):
                 self.redundant[face.tight_list[0]] = False
 
 
+    def essential_constraints_rand_walk(self, count=100, burn=1000, thin=10, x_0=None):
+        ''' Finds non-redundant constraints by generating random samples from the polytope using
+            fast MCMC algorithms, and then projects on to the faces from these points.
+
+            Args:
+                count: Number of points to collect.
+                burn: Number of points to skip at beginning of chain.
+                thin: Number of points to take from sampler for every point.
+
+            modifies:   'self.redundant'
+        '''
+
+        if x_0 is None:
+            # x_0 = chebyshev_center(self.ub_A, self.ub_b)
+            _, x_0 = utils.MVIE_ellipse(self.ub_A, self.ub_b)
+
+        # Generate Points
+        dikin_radius = 1
+        sampler_args = (dikin_radius,)
+        samples = collect_chain(dikin_walk, count, burn, thin, self.ub_A, self.ub_b, x_0, *sampler_args)
+
+        # Projections + Ray Shooting (modifies ptope.redundant)
+        utils.project_plus_ray(samples, self)
 
 
+
+
+    def get_potent_facets(self):
+        ''' Returns a list of all potentially (n-1) dimensional faces of polytope'''
+
+        return [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
 
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
@@ -539,4 +576,3 @@ class Face(Polytope):
         b = np.hstack((self.poly_b, np.multiply(self.b_eq, -1.0)))
 
         return A, b
-

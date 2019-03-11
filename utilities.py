@@ -172,14 +172,16 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
 
 from mosek.fusion import *
 
-'''
-Models the convex set 
 
-  S = { (x, t) \in R^n x R | x >= 0, t <= (x1 * x2 * ... * xn)^(1/n) }
-
-using three-dimensional power cones
-'''
 def geometric_mean(M, x, t):
+    '''
+    Models the convex set
+
+      S = { (x, t) \in R^n x R | x >= 0, t <= (x1 * x2 * ... * xn)^(1/n) }
+
+    using three-dimensional power cones
+    '''
+
     n = int(x.getSize())
     if n==1:
       M.constraint(Expr.sub(t, x), Domain.lessThan(0.0))
@@ -189,23 +191,25 @@ def geometric_mean(M, x, t):
       geometric_mean(M, x.slice(0,n-1), t2)
 
 
-'''
- Purpose: Models the hypograph of the n-th power of the
- determinant of a positive definite matrix. See [1,2] for more details.
 
-   The convex set (a hypograph)
-
-   C = { (X, t) \in S^n_+ x R |  t <= det(X)^{1/n} },
-
-   can be modeled as the intersection of a semidefinite cone
-
-   [ X, Z; Z^T Diag(Z) ] >= 0  
-
-   and a number of rotated quadratic cones and affine hyperplanes,
-
-   t <= (Z11*Z22*...*Znn)^{1/n}  (see geometric_mean).
-'''
 def det_rootn(M, t, n):
+    '''
+     Purpose: Models the hypograph of the n-th power of the
+     determinant of a positive definite matrix. See [1,2] for more details.
+
+       The convex set (a hypograph)
+
+       C = { (X, t) \in S^n_+ x R |  t <= det(X)^{1/n} },
+
+       can be modeled as the intersection of a semidefinite cone
+
+       [ X, Z; Z^T Diag(Z) ] >= 0
+
+       and a number of rotated quadratic cones and affine hyperplanes,
+
+       t <= (Z11*Z22*...*Znn)^{1/n}  (see geometric_mean).
+    '''
+
     # Setup variables
     Y = M.variable(Domain.inPSDCone(2 * n))
 
@@ -225,27 +229,29 @@ def det_rootn(M, t, n):
     # Return an n x n PSD variable which satisfies t <= det(X)^(1/n)
     return X
 
-'''
-  The inner ellipsoidal approximation to a polytope 
 
-     S = { x \in R^n | Ax < b }.
-
-  maximizes the volume of the inscribed ellipsoid,
-
-     { x | x = C*u + d, || u ||_2 <= 1 }.
-
-  The volume is proportional to det(C)^(1/n), so the
-  problem can be solved as 
-
-    maximize         t
-    subject to       t       <= det(C)^(1/n)
-                || C*ai ||_2 <= bi - ai^T * d,  i=1,...,m
-                C is PSD
-
-  which is equivalent to a mixed conic quadratic and semidefinite
-  programming problem.
-'''
 def MVIE_ellipse(A, b):
+    '''
+      The inner ellipsoidal approximation to a polytope
+
+         S = { x \in R^n | Ax < b }.
+
+      maximizes the volume of the inscribed ellipsoid,
+
+         { x | x = C*u + d, || u ||_2 <= 1 }.
+
+      The volume is proportional to det(C)^(1/n), so the
+      problem can be solved as
+
+        maximize         t
+        subject to       t       <= det(C)^(1/n)
+                    || C*ai ||_2 <= bi - ai^T * d,  i=1,...,m
+                    C is PSD
+
+      which is equivalent to a mixed conic quadratic and semidefinite
+      programming problem.
+    '''
+
     A = A.tolist()
     b = b.tolist()
     with Model("lownerjohn_inner") as M:
@@ -265,10 +271,94 @@ def MVIE_ellipse(A, b):
         M.objective(ObjectiveSense.Maximize, t)
 
         M.solve()
-
+        print('we got here')
+        print(C)
         C, d = C.level(), d.level()
-        return ([C[i:i + n] for i in range(0, n * n, n)], d)
+        C = [C[i:i + n] for i in range(0, n * n, n)]
+        return C, d
 
+
+def project_plus_ray(samples, ptope, ax=plt.axes()):
+    ''' Computes l2 projection onto all hyperplanes defined from each inequality constraint of ptope.
+        If projection is_feasible, then constraint is non-redundant. Otherwise, implement ray-shoot
+        to find a non-redundant constraint.
+
+        Args:   samples => a list of points for which process is conducted
+                ptope   => a polytope
+
+        Modifies:   ptope.redundant
+
+        Returns:    list of list of projections from each sample'''
+
+    print('number of samples:', len(samples))
+    potent_faces = ptope.get_potent_facets()
+    boundary_pt_groups = []
+
+    for sample in samples:
+        boundary_pts = []
+        hyp_projections = []
+        for face in potent_faces:
+            projection = face.get_hyperplane_proj_l2(sample)
+            hyp_projections.append(projection)
+            is_feasible, constr_bools = ptope.is_point_fesible_plus(projection)
+
+            if is_feasible:
+                # if hyperplane projection is inside the polytope, then face is non-redundant
+                ptope.redundant[face.tight_list[0]] = False
+                boundary_pts.append(projection)
+            else:
+                # ray-shoot in direction (projection-sample) to find a non-redundant constraint
+                ray_projection = ray_shoot(sample, projection-sample, ptope, potent_faces, ~np.asarray(constr_bools))
+                boundary_pts.append(ray_projection)
+
+        hyp_projections = np.asarray(hyp_projections)
+        boundary_pts = np.asarray(boundary_pts)
+
+        # # # TEMP PLOTING
+        # plot_polytopes_2d([ptope, ], ax=ax)
+        # plt.xlim([-2,2])
+        # plt.ylim([-2,2])
+        # plot_hyperplanes(ptope.ub_A, ptope.ub_b, ax=ax)
+        # ax.scatter(sample[0], sample[1], marker='*', linewidths=4)
+        # ax.scatter(hyp_projections[:, 0], hyp_projections[:, 1], linewidths=1)
+        # ax.scatter(boundary_pts[:, 0], boundary_pts[:, 1], marker='*', linewidths=2)
+        # for pt in hyp_projections:
+        #     ax.plot([pt[0], sample[0]], [pt[1], sample[1]])
+
+        boundary_pt_groups.append(boundary_pts)
+    # plt.show()
+    return boundary_pt_groups
+
+def ray_shoot(x_0, d, ptope, facets, facet_bools=None):
+    ''' Given a list of facets, an initial point 'x_0', and direction 'd', method finds the first
+        constraint hit in that direction. 'Facet_bools' decides if that facet is considered in the
+        list of potential facets.
+
+        Modifies:   ptope.redundant '''
+
+    if facet_bools is None:
+        facet_bools = [True for _ in range(0, len(facets))]
+
+    # Compute projection onto each considered facet in the direction d
+    distances = []
+    considered_indices = []
+    for index, facet_bool in enumerate(facet_bools):
+        if facet_bool:
+            considered_indices.append(index)
+            face = facets[index]
+            dist = (face.b_eq[0] - np.inner(face.a_eq[0], x_0)) / np.inner(face.a_eq[0], d)
+            if dist >= 0:
+                distances.append(dist)
+            else:
+                distances.append(np.inf)
+
+
+    # Sort distances, the closest is non-redundant
+    tight_index = np.argsort(distances)[0]
+
+    ptope.redundant[considered_indices[tight_index]] = False
+
+    return x_0 + distances[tight_index]*d
 
 ##########################################################################
 #                                                                        #
@@ -425,7 +515,11 @@ def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     ax.add_artist(circle)
 
 
-def plot_hyperplanes(ub_A, ub_b, styles, ax=plt.axes()):
+def plot_hyperplanes(ub_A, ub_b, styles=None, ax=plt.axes()):
+    ''' Plots all hyperplanes defined by each constraint of ub_A and ub_b'''
+
+    if styles is None:
+        styles = ['-' for _ in range(0, np.shape(ub_A)[0])]
 
     for a, b, style in zip(ub_A, ub_b, styles):
         m = -a[0]/a[1]
@@ -460,7 +554,7 @@ def plot_line(slope, intercept, style, ax=plt.axes()):
     axes = plt.gca()
     x_vals = np.array(axes.get_xlim())
     y_vals = intercept + slope * x_vals
-    ax.plot(x_vals, y_vals, style)
+    ax.plot(x_vals, y_vals, style, c='black')
 
 def plot_ellipse(P, c, ax=plt.axes()):
     theta = np.linspace(0, 2 * np.pi, 100)
