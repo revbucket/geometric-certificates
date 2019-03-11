@@ -156,7 +156,7 @@ class HeapElement(object):
 
 class IncrementalGeoCert(object):
     def __init__(self, net, verbose=True, display=True, save_dir=None,
-                 ax=None):
+                 ax=None, use_clarkson=True):
 
         # Direct input state
         self.lp_norm = None # filled in later
@@ -167,12 +167,14 @@ class IncrementalGeoCert(object):
         self.display = display
         self.save_dir = save_dir
         self.ax = ax
+        self.use_clarkson = use_clarkson
 
         # Things to keep track of
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
         self.upper_bound = None
+
 
 
     def _verbose_print(self, *args):
@@ -209,10 +211,11 @@ class IncrementalGeoCert(object):
                                 'lp_norm': self.lp_norm,
                                 'hypercube': [0.0, 1.0]}
 
-        new_facets, infeasibles = poly.generate_facets_configs(self.seen_to_polytope_map,
+        new_facets, rejects = poly.generate_facets_configs_2(self.seen_to_polytope_map,
                                                       self.net, check_feasible=True,
                                                       upper_bound_dict=upper_bound_dict)
         self._verbose_print("Num facets: ", len(new_facets))
+        self._verbose_print("REJECT DICT: ", rejects)
 
 
         poly_config = utils.flatten_config(poly.config)
@@ -239,6 +242,10 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, decision_bound=True,
                                   exact_or_estimate='exact')
             heapq.heappush(self.pq, heap_el)
+
+            # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
+            if self.upper_bound is None or facet_distance < self.upper_bound:
+                self.upper_bound = facet_distance
 
     def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
         """ Returns the minimum distance between x and the decision boundary.
@@ -267,7 +274,7 @@ class IncrementalGeoCert(object):
         #####################################################################
         #   Step 0b: If compute upper bound, compute the upper bound radius #
         #####################################################################
-
+        cw_bound = None
         upper_bound_dist = None
         if compute_upper_bound:
             # Do a carlini wagner L2 and if it's successful we have a great
@@ -297,6 +304,7 @@ class IncrementalGeoCert(object):
                                         torch.Tensor(x).view(1, -1)).norm().item()
                     self._verbose_print("CWL2 found an upper bound of:",
                                         self.upper_bound)
+                    cw_bound = self.upper_bound
                 else:
                     self._verbose_print("CWL2 failed to find an upper bound")
 
@@ -325,7 +333,7 @@ class IncrementalGeoCert(object):
                 self._verbose_print('----------Minimal Projection Generated----------')
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
-                return pop_el.lp_dist
+                return pop_el.lp_dist, cw_bound
 
             # Otherwise, open up a new polytope and explore
             else:
