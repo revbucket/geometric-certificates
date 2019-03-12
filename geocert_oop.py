@@ -156,7 +156,7 @@ class HeapElement(object):
 
 class IncrementalGeoCert(object):
     def __init__(self, net, verbose=True, display=True, save_dir=None,
-                 ax=None, use_clarkson=True):
+                 ax=None, use_clarkson=True, config_fxn='v1'):
 
         # Direct input state
         self.lp_norm = None # filled in later
@@ -168,12 +168,16 @@ class IncrementalGeoCert(object):
         self.save_dir = save_dir
         self.ax = ax
         self.use_clarkson = use_clarkson
-
+        facet_config_map = {'v1': Polytope.generate_facets_configs,
+                            'v2': Polytope.generate_facets_configs_2,
+                            'parallel': Polytope.generate_facets_configs_parallel_2}
+        self.facet_config_fxn = facet_config_map[config_fxn]
         # Things to keep track of
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
         self.upper_bound = None
+
 
 
 
@@ -211,9 +215,12 @@ class IncrementalGeoCert(object):
                                 'lp_norm': self.lp_norm,
                                 'hypercube': [0.0, 1.0]}
 
-        new_facets, rejects = poly.generate_facets_configs_2(self.seen_to_polytope_map,
-                                                      self.net, check_feasible=True,
-                                                      upper_bound_dict=upper_bound_dict)
+
+        new_facets, rejects = self.facet_config_fxn(poly,
+                                              self.seen_to_polytope_map,
+                                              self.net, check_feasible=True,
+                                              upper_bound_dict=upper_bound_dict,
+                                              use_clarkson=self.use_clarkson)
         self._verbose_print("Num facets: ", len(new_facets))
         self._verbose_print("REJECT DICT: ", rejects)
 
@@ -297,6 +304,7 @@ class IncrementalGeoCert(object):
                 success_out = pert_out.collect_successful(self.net, normalizer,
                                                   success_def='alter_top_logit')
 
+                self.net.cpu()
 
                 if success_out['success_idxs'].numel() > 0:
 
@@ -331,6 +339,7 @@ class IncrementalGeoCert(object):
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
                 self._verbose_print('----------Minimal Projection Generated----------')
+                self._verbose_print("DIST: ", pop_el.lp_dist)
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
                 return pop_el.lp_dist, cw_bound

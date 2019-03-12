@@ -48,6 +48,34 @@ def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound,
     return facets, reject_reasons
 
 
+def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict, 
+                   seen_dict, net):
+    facet = Face(ub_A, ub_b, [tight_idx], config=config)
+
+    if upper_bound_dict is not None:
+        reject_status, reason = facet.reject_via_upper_bound(upper_bound_dict)
+        if reject_status:
+            return (False, reason)
+
+    if True: #check_feasible:
+        facet.check_feasible()
+    if not facet.is_feasible:
+        return (False, 'infeasible')
+
+    facet.check_facet() 
+    if facet.is_facet:
+        new_configs = facet.get_new_configs(net)
+        new_configs_flat = utils.flatten_config(new_configs)
+        shared_facet_bools = [new_configs_flat == other_config_flat
+                               for other_config_flat in seen_dict]
+        if not any(shared_facet_bools):
+            return (True, facet)                
+        else:
+            return (False, 'shared')
+    else:
+        return (False, 'not-facet') 
+
+
 
 
 def from_polytope_dict(polytope_dict):
@@ -83,6 +111,65 @@ class Polytope(object):
             if facet.is_facet:
                 facets.append(facet)
         return facets
+
+
+
+    def generate_facets_configs_parallel_2(self, seen_polytopes_dict, net, 
+                                         check_feasible=False, 
+                                         upper_bound_dict=None, 
+                                         use_clarkson=False):
+
+        ######################################################################
+        #   Set up global variables and subprocess to be pooled out          #
+        ######################################################################
+        
+        global pool_ub_A 
+        pool_ub_A = self.ub_A 
+
+        global pool_ub_b 
+        pool_ub_b = self.ub_b 
+
+        global pool_upper_bound_dict 
+        pool_upper_bound_dict = upper_bound_dict
+
+        global pool_seen_polytope_dict
+        pool_seen_polytope_dict = seen_polytopes_dict
+
+        global pool_check_feasible
+        pool_check_feasible = check_feasible
+
+        global pool_net 
+        pool_net = net 
+
+        global pool_config 
+        pool_config = self.config
+
+
+        ##################################################################
+        #   Set up pool and offload all the work, and then merge results #
+        ##################################################################
+        
+        pool = mp.Pool(processes=4)
+        maplist = [] 
+        for idx in range(self.ub_A.shape[0]):
+            maplist.append((pool_ub_A, pool_ub_b, idx, pool_config, 
+                            pool_upper_bound_dict, pool_seen_polytope_dict, 
+                            pool_net))
+
+
+        results = [pool.apply_async(handle_facet_2, el) for el in maplist]
+
+        outputs = [res.get() for res in results]
+
+        facets = []
+        reject_dict = {} 
+        for status, output in outputs:
+            if status:
+                facets.append(output)
+            else:
+                reject_dict[output] = reject_dict.get(output, 0) + 1
+        return facets, reject_dict
+
 
     def generate_facets_configs_parallel(self, seen_polytopes_dict, net, 
                                          check_feasible=False, 
@@ -204,7 +291,8 @@ class Polytope(object):
 
 
     def generate_facets_configs_2(self, seen_polytopes_dict, net, 
-                                  check_feasible=False, upper_bound_dict=None):
+                                  check_feasible=False, upper_bound_dict=None,
+                                  use_clarkson=True):
         """ Generates all (n-1) dimensional facets of polytope which aren't
             shared with other polytopes in list. (for ReLu nets)
 
@@ -650,27 +738,33 @@ class Face(Polytope):
 
         # SPEED UP WITH REMOVAL LIST!
 
-        map_idx = sum(~self.removal_list[:self.tight_list[0]])        
-        saved_row = self.poly_a[self.tight_list[0]]
 
-        new_poly_a = self.poly_a[~self.removal_list]
-        new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
-        new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))        
-        new_poly_a[-1][-1] = -1 
+        if self.removal_list is not None:
+            map_idx = sum(~self.removal_list[:self.tight_list[0]])        
+            saved_row = self.poly_a[self.tight_list[0]]
+    
+            new_poly_a = self.poly_a[~self.removal_list]
+            new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
+            new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))        
+            new_poly_a[-1][-1] = -1 
+            new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
 
-        new_poly_b = self.poly_b[~self.removal_list]
-        new_poly_b = np.hstack((new_poly_b, 0))
+            new_poly_b = self.poly_b[~self.removal_list]
+            new_poly_b = np.hstack((new_poly_b, 0))
+        else:
+            new_poly_a = np.ones([m, n+1])
+            new_poly_a[:, :-1] = self.poly_a
+            new_poly_a[self.tight_list, -1] = 0
+            new_poly_b = self.poly_b
         #------
 
 
 
-        #new_poly_a = np.ones([m, n+1])
-        #new_poly_a[:, :-1] = self.poly_a
 
         # Map indices real quick:
 
 
-        new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
+
         bounds = [(None, None) for _ in range(n)]
         bounds.append((1e-11, None))
 
