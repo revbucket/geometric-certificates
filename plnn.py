@@ -199,3 +199,32 @@ class PLNN(nn.Module):
             x = F.relu(fc(x))
         return self.fcs[-1](x) # No ReLu on the last one
 
+
+class PLNN_seq(PLNN):
+    """ Simple piecewise neural net.
+        Fully connected layers and ReLus only
+
+        built from nn.Sequential
+    """
+
+    def __init__(self, sequential, layer_sizes, dtype=torch.FloatTensor):
+        super(PLNN_seq, self).__init__(layer_sizes, dtype)
+        self.fcs = []
+        self.net = self.build_network2(sequential)
+
+    def build_network2(self, sequential):
+        seq_layers = [layer for layer in sequential if type(layer) == nn.Linear]
+        layers = OrderedDict()
+
+        num = 1
+        for layer in seq_layers:
+            layers[str(num)] = layer
+            self.fcs.append(layer)
+            num = num + 1
+            layers[str(num)] = nn.ReLU()
+            num = num + 1
+
+
+        del layers[str(num - 1)]  # No ReLU for the last layer
+
+        return nn.Sequential(layers).type(self.dtype)
