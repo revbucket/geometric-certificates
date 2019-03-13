@@ -187,3 +187,15 @@ class PLNN(nn.Module):
             x = F.relu(fc(x))
         return self.fcs[-1](x) # No ReLu on the last one
 
+
+class PLNN_seq(PLNN):
+    """ Simple piecewise neural net.
+        Fully connected layers and ReLus only
+
+        built from nn.Sequential
+    """
+
+    def __init__(self, sequential, layer_sizes, dtype=torch.FloatTensor):
+        super(PLNN_seq, self).__init__(layer_sizes, dtype)
+        self.fcs = [layer for layer in sequential if type(layer) == nn.Linear]
+        self.net = sequential

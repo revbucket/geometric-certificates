@@ -192,7 +192,7 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
         pushes facets to the heap, and updates seen maps
     '''
 
-    polytope_facets = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
+    polytope_facets, reject_reasons = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
     print('num facets: ', len(polytope_facets))
 
     polytope_config = utils.flatten_config(polytope.config)
@@ -239,6 +239,13 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
     ''' Plots the current search boundary based on the heap, the seen polytopes,
         the current minimal lp ball, and any classification boundary facets
     '''
+
+    # Check x is 2dimensional
+    if np.shape(x)[1] != 2:
+        return
+
+    # Plot Polytopes, etc.
+
     plt.figure(figsize=[10, 10])
     if ax is None:
         ax = plt.axes()

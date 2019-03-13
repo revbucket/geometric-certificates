@@ -291,8 +291,10 @@ class Polytope(object):
 
         redundant_set = set()
         if check_feasible and use_clarkson:
+            print('starting clarkson')
             redundant_set = self.clarkson_redundancy_set(self.interior_point)
             print("Clarkson found %s redundant constraints" % len(redundant_set))
+            print('done with clarkson')
 
         for i in range(num_constraints):
             if i in redundant_set:
@@ -307,13 +309,17 @@ class Polytope(object):
                     continue
 
             if check_feasible:
+                print('start check feasible')
                 facet.check_feasible()
+                print('end check feasible')
             if not facet.is_feasible:                
                 reject_reasons['infeasible'] = reject_reasons.get('infeasible', 0) + 1
             else:
                 assert i not in redundant_set
 
+            print('start check facet')
             facet.check_facet()
+            print('end check facet')
             if facet.is_facet:
                 # Check to see if facet is shared with a seen polytope                
                 new_configs = facet.get_new_configs(net)
@@ -775,11 +781,10 @@ class Face(Polytope):
 
         # SPEED UP WITH REMOVAL LIST!
 
-
         if self.removal_list is not None:
             map_idx = sum(~self.removal_list[:self.tight_list[0]])        
             saved_row = self.poly_a[self.tight_list[0]]
-    
+
             new_poly_a = self.poly_a[~self.removal_list]
             new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
             new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))        
@@ -1044,6 +1049,9 @@ class Face(Polytope):
     def l2_dist(self, x):
         """ Returns the l_2 distance to point x using LP"""
 
+        n = np.shape(self.poly_a)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
         # set up the quadratic program
         # min_{v} v^T*v
         # s.t.
@@ -1116,7 +1124,6 @@ class Face(Polytope):
 
 
         return False, None
-
 
 
 
