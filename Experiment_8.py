@@ -41,8 +41,6 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
     P, c = utils.MVIE_ellipse(self.ub_A, self.ub_b)
     P = np.asarray(P)
     c = np.asarray(c)
-    time_2 = time.time()
-    print('ellipse:', time_2-time_1)
 
     # Approximate max. vol. circum. ellipse (provable bounds polytope)
     P_outer = np.multiply(n, P)
@@ -79,9 +77,7 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
             redund.append(face.tight_list[0])
             redundant_list[face.tight_list[0]] = True
 
-    time_3 = time.time()
-    print('ellipse_support:', time_3-time_2)
-    print('ellipse_total:', time_3-time_1)
+    print('ellipse_total:', time.time()-time_1)
 
     print('redund_ellipse:', redund)
     print('non_redund_ellipse:', non_redund)
@@ -94,45 +90,61 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
 # Load Network
 # =====================
 
-print('===============Initializing Network============')
-cwd = os.getcwd()
-folderpath = cwd + "/data/"
-filepath = folderpath + "acas_xu_net"
-sequential = torch.load(filepath)
-
-layer_shape = lambda layer: layer.weight.detach().numpy().shape
-layer_sizes = [layer_shape(layer)[1] for layer in sequential if type(layer) == nn.Linear] + [layer_shape(sequential[-1])[0]]
-dtype = torch.FloatTensor
-network = PLNN_seq(sequential, layer_sizes, dtype)
-net = network.net
-
-
 # print('===============Initializing Network============')
-# layer_sizes = [5, 50, 8, 2]
-# network = PLNN(layer_sizes)
+# cwd = os.getcwd()
+# folderpath = cwd + "/data/"
+# filepath = folderpath + "acas_xu_net"
+# sequential = torch.load(filepath)
+#
+# layer_shape = lambda layer: layer.weight.detach().numpy().shape
+# layer_sizes = [layer_shape(layer)[1] for layer in sequential if type(layer) == nn.Linear] + [layer_shape(sequential[-1])[0]]
+# dtype = torch.FloatTensor
+# network = PLNN_seq(sequential, layer_sizes, dtype)
 # net = network.net
 
 
-# ==================================
-# Get Polytope
-# ==================================
-input_dim = layer_sizes[0]
-x_0 = torch.Tensor(np.random.uniform(size=(input_dim)).reshape([input_dim, 1]))
-poly_dict = network.compute_polytope(x_0)
-polytope = from_polytope_dict(poly_dict)
+print('===============Initializing Network============')
+cwd = os.getcwd()
+layer_sizes = [2, 10, 8, 2]
+network = PLNN(layer_sizes)
+net = network.net
+dtype = torch.FloatTensor
 
 
-# ==================================
-# Constraint Determination Exact
-# ==================================
+# # ==================================
+# # Get Polytope
+# # ==================================
+# input_dim = layer_sizes[0]
+# x_0 = torch.Tensor(np.random.uniform(size=(input_dim)).reshape([input_dim, 1]))
+# poly_dict = network.compute_polytope(x_0)
+# polytope = from_polytope_dict(poly_dict)
 
-time_4 = time.time()
-facets, reject_reasons = polytope.generate_facets_configs([], network, check_feasible=True)
-time_5 = time.time()
-print('clarkson:', time_5-time_4)
-print('non_redund_true_clarkson:', [facet.tight_list[0] for facet in facets])
-print('num non_redund_true_clarkson:', len(facets))
 
+# # ==================================
+# # Constraint Determination Exact
+# # ==================================
+#
+# time_4 = time.time()
+# facets, reject_reasons = polytope.generate_facets_configs([], network, check_feasible=True)
+# time_5 = time.time()
+# print('clarkson time:', time_5-time_4)
+# print('non_redund_true_clarkson:', [facet.tight_list[0] for facet in facets])
+# print('num non_redund_true_clarkson:', len(facets))
+#
+# time_4 = time.time()
+# facets, reject_reasons = polytope.generate_facets_configs_2([], network, check_feasible=True)
+# time_5 = time.time()
+# print('clarkson 2 time:', time_5-time_4)
+# print('non_redund_true_clarkson2:', [facet.tight_list[0] for facet in facets])
+# print('num non_redund_true_clarkson2:', len(facets))
+#
+# time_4 = time.time()
+# facets, reject_reasons = polytope.generate_facets_configs_parallel([], network, check_feasible=True)
+# time_5 = time.time()
+# print('parallel time:', time_5-time_4)
+# print('non_redund_true_parallel:', [facet.tight_list[0] for facet in facets])
+# print('num non_redund_true_parallel:', len(facets))
+#
 # time_4 = time.time()
 # facets, reject_reasons = polytope.generate_facets_configs([], network, use_clarkson=False, check_feasible=True)
 # time_5 = time.time()
@@ -141,48 +153,77 @@ print('num non_redund_true_clarkson:', len(facets))
 # print('non_redund_true:', [facet.tight_list[0] for facet in facets])
 # print('num non_redund_true:', len(facets))
 
-# ==================================
-# Constraint Determination Heuristic
-# ==================================
-
-list = constr_heuristic_ellipse(polytope, input_dim)
-
-num_redund = np.sum([1 for elem in list if elem and elem is not None])
-num_non_redund = np.sum([1 for elem in list if not elem and elem is not None])
-num_unknown = np.sum([1 for elem in list if not elem and elem is None])
-total = len(list)
-
-print('num_redund:', num_redund)
-print('num_non_redund:', num_non_redund)
-print('num_unknown:', num_unknown)
-print('total:', total)
-print('total_prime:', num_non_redund+num_redund+num_unknown)
-print('percentage: ', (num_non_redund+num_redund)/total*100, '%')
-
-
 # # ==================================
-# # Find Projections
+# # Constraint Determination Heuristic
 # # ==================================
 #
-# lp_norm = 'l_2'
-# ts = []
-# input_dim = layer_sizes[0]
-# pts = [np.random.uniform(0, 1, [1, input_dim]),]
+# list = constr_heuristic_ellipse(polytope, input_dim)
 #
+# num_redund = np.sum([1 for elem in list if elem and elem is not None])
+# num_non_redund = np.sum([1 for elem in list if not elem and elem is not None])
+# num_unknown = np.sum([1 for elem in list if not elem and elem is None])
+# total = len(list)
 #
-# for pt in pts:
-#     print('===============Finding Projection============')
-#     print('lp_norm: ', lp_norm)
-#     x_0 = torch.Tensor(pt.reshape([1, input_dim])).type(dtype)
-#     print('from point: ')
-#     print(x_0)
-#
-#     ax = plt.axes()
-#     cwd = os.getcwd()
-#     plot_dir = cwd + '/plots/incremental_geocert/'
-#
-#     geocert = IncrementalGeoCert(network)
-#     t, cw_bound = geocert.min_dist(x_0, lp_norm, False)
-#     print('the final projection value:', t)
-#     print('carlin-wagner bound', cw_bound)
-#     ts.append(t)
+# print('num_redund:', num_redund)
+# print('num_non_redund:', num_non_redund)
+# print('num_unknown:', num_unknown)
+# print('total:', total)
+# print('total_prime:', num_non_redund+num_redund+num_unknown)
+# print('percentage: ', (num_non_redund+num_redund)/total*100, '%')
+
+
+# ==================================
+# Find Projections
+# ==================================
+
+lp_norm = 'l_2'
+ts = []
+input_dim = layer_sizes[0]
+
+pts = np.load(cwd + "/data/"+"acas_inputs.npy")
+pts = [pts[-2][0:2]]    #TODO: fix this
+plot_dir = cwd+'plots/incremental_geocert/'
+geocert = IncrementalGeoCert(network, display=True, config_fxn='v2', save_dir=plot_dir)
+
+start_time = time.time()
+print('START TIME:', start_time)
+
+for pt in pts:
+    print('===============Finding Projection============')
+    print('lp_norm: ', lp_norm)
+    x_0 = torch.Tensor(pt.reshape([1, input_dim])).type(dtype)
+    print('from point: ')
+    print(x_0)
+
+    ax = plt.axes()
+    cwd = os.getcwd()
+    plot_dir = cwd + '/plots/incremental_geocert/'
+
+
+    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, False)
+    print('the final projection value:', t)
+    print('carlin-wagner bound', cw_bound)
+    ts.append(t)
+
+
+end_time = time.time()
+print('END TIME:', end_time)
+
+print('TOTAL TIME (s):', end_time-start_time)
+
+
+# ==================================
+# Check Projection is Adv. Example
+# ==================================
+
+orig_output = net.forward(x_0)
+print('orig_output')
+print(orig_output)
+
+adver_examp = torch.Tensor(adver_examp.reshape([1, input_dim])).type(dtype)
+print('adv_example:')
+print(adver_examp)
+
+new_output = net.forward(adver_examp)
+print('new output:')
+print(new_output)

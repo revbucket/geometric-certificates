@@ -291,10 +291,8 @@ class Polytope(object):
 
         redundant_set = set()
         if check_feasible and use_clarkson:
-            print('starting clarkson')
             redundant_set = self.clarkson_redundancy_set(self.interior_point)
             print("Clarkson found %s redundant constraints" % len(redundant_set))
-            print('done with clarkson')
 
         for i in range(num_constraints):
             if i in redundant_set:
@@ -309,17 +307,13 @@ class Polytope(object):
                     continue
 
             if check_feasible:
-                print('start check feasible')
                 facet.check_feasible()
-                print('end check feasible')
             if not facet.is_feasible:                
                 reject_reasons['infeasible'] = reject_reasons.get('infeasible', 0) + 1
             else:
                 assert i not in redundant_set
 
-            print('start check facet')
             facet.check_facet()
-            print('end check facet')
             if facet.is_facet:
                 # Check to see if facet is shared with a seen polytope                
                 new_configs = facet.get_new_configs(net)
@@ -995,7 +989,8 @@ class Face(Polytope):
     def linf_dist(self, x):
         #TODO: this method doesn't  seem to always correctly find the projection onto a facet
 
-        """ Returns the l_inf distance to point x using LP"""
+        """ Returns the l_inf distance to point x using LP
+            as well as the optimal value of the program"""
 
         # set up the linear program
         # min_{t,v} t
@@ -1041,13 +1036,14 @@ class Face(Polytope):
                                         bounds=bounds)
 
         if linprog_result.status == 0:
-            return linprog_result.fun
+            return linprog_result.fun, linprog_result.x[1:]     # don't need opt value of t
         else:
             raise Exception("LINPROG FAILED: " + linprog_result.message)
 
 
     def l2_dist(self, x):
-        """ Returns the l_2 distance to point x using LP"""
+        """ Returns the l_2 distance to point x using LP
+            as well as the optimal value of the program"""
 
         n = np.shape(self.poly_a)[1]
         x = utils.as_numpy(x).reshape(n, -1)
@@ -1070,7 +1066,7 @@ class Face(Polytope):
 
         if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
             x = np.array(quad_program_result['x'])
-            return np.linalg.norm(x)
+            return np.linalg.norm(x), x
         else:
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 
@@ -1105,7 +1101,7 @@ class Face(Polytope):
         dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
         eq_a = self.a_eq
         eq_b = self.b_eq.item()
-        proj = (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a, ord=dual_norm)
+        proj = (eq_b - np.matmul(x, eq_a.T)) / np.linalg.norm(eq_a, ord=dual_norm)
 
         if proj > upper_bound_dict['upper_bound']:
             return True, 'upper_bound'

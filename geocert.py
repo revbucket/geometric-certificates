@@ -33,9 +33,9 @@ def batch_GeoCert(polytope_list, x, norm='inf', comp_method='slow'):
     boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
 
     if norm == 'l_inf':
-        dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
+        dist_to_boundary = [facet.linf_dist(x)[0] for facet in boundary]
     elif norm == 'l_2':
-        dist_to_boundary = [facet.l2_dist(x) for facet in boundary]
+        dist_to_boundary = [facet.l2_dist(x)[0] for facet in boundary]
 
     return min(dist_to_boundary), boundary, shared_facets
 
@@ -227,9 +227,9 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
 
 def get_lp_dist(lp_norm, facet, x):
     if lp_norm == 'l_2':
-        return facet.l2_dist(x)
+        return facet.l2_dist(x)[0]
     elif lp_norm == 'l_inf':
-        return facet.linf_dist(x)
+        return facet.linf_dist(x)[0]
     else:
         raise NotImplementedError
 
