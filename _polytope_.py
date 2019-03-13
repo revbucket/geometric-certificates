@@ -75,8 +75,36 @@ def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict,
     else:
         return (False, 'not-facet') 
 
+def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
+    facet = Face(ub_A, ub_b, [tight_idx], config=config)
 
+    if upper_bound_dict is not None:
+        reject_status, reason = facet.reject_via_upper_bound(upper_bound_dict)
+        if reject_status:
+            return (False, reason)
 
+    if True: #check_feasible:
+        facet.check_feasible()
+    if not facet.is_feasible:
+        return (False, 'infeasible')
+
+    facet.check_facet() 
+    return (True, facet)
+
+def finish_handle_facet_3(facet, config, seen_dict, net):
+    if facet.is_facet:
+        new_configs = facet.get_new_configs(net)
+        new_configs_flat = utils.flatten_config(new_configs)
+        shared_facet_bools = [new_configs_flat == other_config_flat
+                               for other_config_flat in seen_dict]
+        if not any(shared_facet_bools):
+            return (True, facet)                
+        else:
+            return (False, 'shared')
+    else:
+        return (False, 'not-facet') 
+
+    
 
 def from_polytope_dict(polytope_dict):
     return Polytope(polytope_dict['poly_a'],
@@ -152,18 +180,27 @@ class Polytope(object):
         pool = mp.Pool(processes=4)
         maplist = [] 
         for idx in range(self.ub_A.shape[0]):
-            maplist.append((pool_ub_A, pool_ub_b, idx, pool_config, 
-                            pool_upper_bound_dict, pool_seen_polytope_dict, 
-                            pool_net))
+            new_uba = np.array(pool_ub_A, copy=True)
+            new_ubb = np.array(pool_ub_b, copy=True)
+            new_config = copy.deepcopy(pool_config)
+            new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
+            maplist.append((new_uba, new_ubb, idx, new_config, 
+                            new_upper_bound_dict))
 
-
-        results = [pool.apply_async(handle_facet_2, el) for el in maplist]
-
+        results = [pool.apply_async(handle_facet_3, el) for el in maplist]
         outputs = [res.get() for res in results]
+        new_outputs = [] 
+        for status, output in outputs:
+            if status:
+                new_outputs.append(finish_handle_facet_3(output, pool_config, 
+                                                         seen_polytopes_dict, 
+                                                         net))
+            else:
+                new_outputs.append((status, output))
 
         facets = []
         reject_dict = {} 
-        for status, output in outputs:
+        for status, output in new_outputs:
             if status:
                 facets.append(output)
             else:
