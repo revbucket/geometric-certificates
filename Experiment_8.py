@@ -94,7 +94,7 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
 print('===============Initializing Network============')
 cwd = os.getcwd()
 folderpath = cwd + "/data/"
-filepath = folderpath + "acas_xu_net"
+filepath = folderpath + "acas_xu_net_true"
 sequential = torch.load(filepath)
 
 layer_shape = lambda layer: layer.weight.detach().numpy().shape
