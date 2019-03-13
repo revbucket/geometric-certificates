@@ -122,6 +122,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1
 
         lp_norm: options include    =>  {'l_2' | 'l_inf'}
     """
+
     true_label = int(net(x).max(1)[1].item()) # what the classifier outputs
     seen_to_polytope_map = {} # binary config str -> Polytope object
     seen_to_facet_map = {} # binary config str -> Facet list
@@ -159,8 +160,9 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1
         # If popped element is part of the decision boundary then DONE
         if pop_el.decision_bound:
             print('----------Minimal Projection Generated----------')
-            geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
-                              x, plot_dir, n_colors, iter=index)
+            if plot_iter is not None:
+                geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
+                                  x, plot_dir, n_colors, iter=index)
             return pop_el.lp_dist
 
         # Otherwise, find ReLu configuration on other side of the facet
@@ -238,13 +240,13 @@ def get_lp_dist(lp_norm, facet, x):
 
 
 def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
-                      t, x, plot_dir, n_colors, ax =None, iter=0):
+                      t, x, plot_dir, n_colors, ax=None, iter=0):
     ''' Plots the current search boundary based on the heap, the seen polytopes,
         the current minimal lp ball, and any classification boundary facets
     '''
-    plt.figure(figsize=[10, 10])
-    if ax is None:
-        ax = plt.axes()
+
+    fig, ax = plt.subplots()
+
     polytope_list = [seen_to_polytope_map[elem] for elem in seen_to_polytope_map]
     facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if not heap_elem.decision_bound]
     boundary_facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if heap_elem.decision_bound]

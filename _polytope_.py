@@ -220,6 +220,7 @@ class Polytope(object):
 
         return [Face(self.ub_A, self.ub_b, tight_list=[i]) for i in range(0, np.shape(self.ub_A)[0])]
 
+
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None):
         super(Face, self).__init__(poly_a, poly_b, config=config)
@@ -527,13 +528,15 @@ class Face(Polytope):
     def l2_dist(self, x):
         """ Returns the l_2 distance to point x using LP"""
 
+        n = np.shape(self.poly_a)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
         # set up the quadratic program
         # min_{v} v^T*v
         # s.t.
         # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
         # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
 
-        n = np.shape(x)[0]
         P = matrix(np.identity(n))
         G = matrix(self.poly_a)
         h = matrix(self.poly_b - np.matmul(self.poly_a, x)[:, 0])
