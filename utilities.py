@@ -380,12 +380,14 @@ def plot_facets_2d(facet_list, alpha=1.0,
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots linf norm ball of size t centered at x_0 (only in R^2)
     """
+    x_0 = as_numpy(x_0).reshape(2)
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
 def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
+    x_0 = as_numpy(x_0).reshape(2)
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
 

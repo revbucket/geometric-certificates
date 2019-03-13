@@ -346,6 +346,7 @@ class IncrementalGeoCert(object):
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
                 adver_examp = pop_el.projection
+
                 return pop_el.lp_dist, cw_bound, adver_examp
 
             # Otherwise, open up a new polytope and explore

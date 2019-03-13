@@ -502,6 +502,7 @@ class Polytope(object):
 
         c = self.ub_A[i] 
         if not any(active_indices): # base case, nothing is redundant
+            #TODO: this doesn't work when self.interior_point is NONE
             return (False, self.interior_point + c) # Just need the direction
 
         real_active_indices = active_indices & (~removal_list)
@@ -1000,8 +1001,10 @@ class Face(Polytope):
         # 3)  v <= t * 1           (<==>)    v_i - t <= 0
         # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
 
+        n = np.shape(self.poly_a)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
         # optimization variable is [t, v]
-        n = x.shape[0]
         m = self.poly_a.shape[0]
         c = np.zeros(n+1)
         c[0] = 1
@@ -1036,7 +1039,7 @@ class Face(Polytope):
                                         bounds=bounds)
 
         if linprog_result.status == 0:
-            return linprog_result.fun, linprog_result.x[1:]     # don't need opt value of t
+            return linprog_result.fun, x + linprog_result.x[1:].reshape(n,-1)     # include projection x + v_opt
         else:
             raise Exception("LINPROG FAILED: " + linprog_result.message)
 
@@ -1045,8 +1048,6 @@ class Face(Polytope):
         """ Returns the l_2 distance to point x using LP
             as well as the optimal value of the program"""
 
-        n = np.shape(self.poly_a)[1]
-        x = utils.as_numpy(x).reshape(n, -1)
 
         # set up the quadratic program
         # min_{v} v^T*v
@@ -1054,7 +1055,9 @@ class Face(Polytope):
         # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
         # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
 
-        n = np.shape(x)[0]
+        n = np.shape(self.poly_a)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
         P = matrix(np.identity(n))
         G = matrix(self.poly_a)
         h = matrix(self.poly_b - np.matmul(self.poly_a, x)[:, 0])
@@ -1065,8 +1068,8 @@ class Face(Polytope):
         quad_program_result = solvers.qp(P, q, G, h, A, b)
 
         if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
-            x = np.array(quad_program_result['x'])
-            return np.linalg.norm(x), x
+            v = np.array(quad_program_result['x'])
+            return np.linalg.norm(v), x + v.reshape(n,-1)
         else:
             raise Exception("QPPROG FAILED: " + quad_program_result['status'])
 

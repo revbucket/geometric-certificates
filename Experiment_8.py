@@ -19,6 +19,8 @@ import numpy as np
 from _polytope_ import from_polytope_dict, Face
 import utilities as utils
 import time
+import torch.optim as optim
+from torch.autograd import Variable
 
 
 def constr_heuristic_ellipse(self, n, redundant_list=None):
@@ -85,30 +87,99 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
     return redundant_list
 
 
-
 # =====================
 # Load Network
 # =====================
 
-# print('===============Initializing Network============')
-# cwd = os.getcwd()
-# folderpath = cwd + "/data/"
-# filepath = folderpath + "acas_xu_net"
-# sequential = torch.load(filepath)
-#
-# layer_shape = lambda layer: layer.weight.detach().numpy().shape
-# layer_sizes = [layer_shape(layer)[1] for layer in sequential if type(layer) == nn.Linear] + [layer_shape(sequential[-1])[0]]
-# dtype = torch.FloatTensor
-# network = PLNN_seq(sequential, layer_sizes, dtype)
-# net = network.net
-
-
 print('===============Initializing Network============')
 cwd = os.getcwd()
-layer_sizes = [2, 10, 8, 2]
-network = PLNN(layer_sizes)
-net = network.net
+folderpath = cwd + "/data/"
+filepath = folderpath + "acas_xu_net"
+sequential = torch.load(filepath)
+
+layer_shape = lambda layer: layer.weight.detach().numpy().shape
+layer_sizes = [layer_shape(layer)[1] for layer in sequential if type(layer) == nn.Linear] + [layer_shape(sequential[-1])[0]]
 dtype = torch.FloatTensor
+network = PLNN_seq(sequential, layer_sizes, dtype)
+net = network.net
+
+
+# print('===============Initializing Network============')
+# cwd = os.getcwd()
+# layer_sizes = [2, 10, 8, 2]
+# network = PLNN(layer_sizes)
+# net = network.net
+# dtype = torch.FloatTensor
+
+
+# ==================================
+# Find Projections
+# ==================================
+
+lp_norm = 'l_inf'
+ts = []
+input_dim = layer_sizes[0]
+
+pts = np.load(cwd + "/data/"+"acas_inputs.npy")
+plot_dir = cwd+'/plots/incremental_geocert/'
+geocert = IncrementalGeoCert(network, display=False, config_fxn='v2', save_dir=plot_dir)
+
+start_time = time.time()
+times = []
+
+for pt in pts:
+    print('===============Finding Projection============')
+    print('lp_norm: ', lp_norm)
+    x_0 = torch.Tensor(pt.reshape([1, input_dim])).type(dtype)
+    print('from point: ')
+    print(x_0)
+
+    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, False)
+    print()
+    print('===============Projection Found============')
+    print('the final projection value:', t)
+    print('carlin-wagner bound', cw_bound)
+    ts.append(t)
+
+
+    intermed_time = time.time()
+    diff = intermed_time-start_time
+    print('ITER TIME:', diff)
+    times.append(diff)
+    start_time = intermed_time
+
+    # ==================================
+    # Check Projection is Adv. Example
+    # ==================================
+
+    print()
+    print('==========Is Adversarial?===========')
+
+    orig_output = net.forward(x_0)
+    print('orig_pt')
+    print(x_0)
+    print('orig_output')
+    print(orig_output)
+
+    adver_examp = torch.Tensor(adver_examp.reshape([1, input_dim])).type(dtype)
+    print('adv_example:')
+    print(adver_examp)
+
+    new_output = net.forward(adver_examp)
+    print('new output:')
+    print(new_output)
+
+    print()
+    print('======================================================')
+
+end_time = time.time()
+
+print('==========================================================')
+print('~~~~PROJECTIONS COMPLETE~~~~')
+print('TOTAL TIME (s):', end_time-start_time)
+
+
+
 
 
 # # ==================================
@@ -170,60 +241,3 @@ dtype = torch.FloatTensor
 # print('total:', total)
 # print('total_prime:', num_non_redund+num_redund+num_unknown)
 # print('percentage: ', (num_non_redund+num_redund)/total*100, '%')
-
-
-# ==================================
-# Find Projections
-# ==================================
-
-lp_norm = 'l_2'
-ts = []
-input_dim = layer_sizes[0]
-
-pts = np.load(cwd + "/data/"+"acas_inputs.npy")
-pts = [pts[-2][0:2]]    #TODO: fix this
-plot_dir = cwd+'plots/incremental_geocert/'
-geocert = IncrementalGeoCert(network, display=True, config_fxn='v2', save_dir=plot_dir)
-
-start_time = time.time()
-print('START TIME:', start_time)
-
-for pt in pts:
-    print('===============Finding Projection============')
-    print('lp_norm: ', lp_norm)
-    x_0 = torch.Tensor(pt.reshape([1, input_dim])).type(dtype)
-    print('from point: ')
-    print(x_0)
-
-    ax = plt.axes()
-    cwd = os.getcwd()
-    plot_dir = cwd + '/plots/incremental_geocert/'
-
-
-    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, False)
-    print('the final projection value:', t)
-    print('carlin-wagner bound', cw_bound)
-    ts.append(t)
-
-
-end_time = time.time()
-print('END TIME:', end_time)
-
-print('TOTAL TIME (s):', end_time-start_time)
-
-
-# ==================================
-# Check Projection is Adv. Example
-# ==================================
-
-orig_output = net.forward(x_0)
-print('orig_output')
-print(orig_output)
-
-adver_examp = torch.Tensor(adver_examp.reshape([1, input_dim])).type(dtype)
-print('adv_example:')
-print(adver_examp)
-
-new_output = net.forward(adver_examp)
-print('new output:')
-print(new_output)
