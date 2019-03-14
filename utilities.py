@@ -179,6 +179,117 @@ def as_numpy(tensor_or_array):
         tensor_or_array = tensor_or_array.cpu().detach().numpy()
     return tensor_or_array
 
+##########################################################################
+#                                                                        #
+#                     Geometric Utilities                                #
+#                                                                        #
+##########################################################################
+
+from mosek.fusion import Expr, Domain, Matrix, Var, Model, ObjectiveSense
+
+
+def geometric_mean(M, x, t):
+    '''
+    Models the convex set
+
+      S = { (x, t) \in R^n x R | x >= 0, t <= (x1 * x2 * ... * xn)^(1/n) }
+
+    using three-dimensional power cones
+    '''
+
+    n = int(x.getSize())
+    if n==1:
+      M.constraint(Expr.sub(t, x), Domain.lessThan(0.0))
+    else:
+      t2 = M.variable()
+      M.constraint(Var.hstack(t2, x.index(n-1), t), Domain.inPPowerCone(1-1.0/n))
+      geometric_mean(M, x.slice(0,n-1), t2)
+
+
+
+def det_rootn(M, t, n):
+    '''
+     Purpose: Models the hypograph of the n-th power of the
+     determinant of a positive definite matrix. See [1,2] for more details.
+
+       The convex set (a hypograph)
+
+       C = { (X, t) \in S^n_+ x R |  t <= det(X)^{1/n} },
+
+       can be modeled as the intersection of a semidefinite cone
+
+       [ X, Z; Z^T Diag(Z) ] >= 0
+
+       and a number of rotated quadratic cones and affine hyperplanes,
+
+       t <= (Z11*Z22*...*Znn)^{1/n}  (see geometric_mean).
+    '''
+
+    # Setup variables
+    Y = M.variable(Domain.inPSDCone(2 * n))
+
+    # Setup Y = [X, Z; Z^T , diag(Z)]
+    X   = Y.slice([0, 0], [n, n])
+    Z   = Y.slice([0, n], [n, 2 * n])
+    DZ  = Y.slice([n, n], [2 * n, 2 * n])
+
+    # Z is lower-triangular
+    M.constraint(Z.pick([[i,j] for i in range(n) for j in range(i+1,n)]), Domain.equalsTo(0.0))
+    # DZ = Diag(Z)
+    M.constraint(Expr.sub(DZ, Expr.mulElm(Z, Matrix.eye(n))), Domain.equalsTo(0.0))
+
+    # t^n <= (Z11*Z22*...*Znn)
+    geometric_mean(M, DZ.diag(), t)
+
+    # Return an n x n PSD variable which satisfies t <= det(X)^(1/n)
+    return X
+
+
+def MVIE_ellipse(A, b):
+    '''
+      The inner ellipsoidal approximation to a polytope
+
+         S = { x \in R^n | Ax < b }.
+
+      maximizes the volume of the inscribed ellipsoid,
+
+         { x | x = C*u + d, || u ||_2 <= 1 }.
+
+      The volume is proportional to det(C)^(1/n), so the
+      problem can be solved as
+
+        maximize         t
+        subject to       t       <= det(C)^(1/n)
+                    || C*ai ||_2 <= bi - ai^T * d,  i=1,...,m
+                    C is PSD
+
+      which is equivalent to a mixed conic quadratic and semidefinite
+      programming problem.
+    '''
+
+    A = A.tolist()
+    b = b.tolist()
+    with Model("lownerjohn_inner") as M:
+        # M.setLogHandler(sys.stdout)   # output of solver
+        m, n = len(A), len(A[0])
+
+        # Setup variables
+        t = M.variable("t", 1, Domain.greaterThan(0.0))
+        C = det_rootn(M, t, n)
+        d = M.variable("d", n, Domain.unbounded())
+
+        # (b-Ad, AC) generate cones
+        M.constraint("qc", Expr.hstack(Expr.sub(b, Expr.mul(A, d)), Expr.mul(A, C)),
+                     Domain.inQCone())
+
+        # Objective: Maximize t
+        M.objective(ObjectiveSense.Maximize, t)
+
+        M.solve()
+        C, d = C.level(), d.level()
+        C = [C[i:i + n] for i in range(0, n * n, n)]
+        return C, d
+
 
 ##########################################################################
 #                                                                        #
@@ -269,12 +380,14 @@ def plot_facets_2d(facet_list, alpha=1.0,
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots linf norm ball of size t centered at x_0 (only in R^2)
     """
+    x_0 = as_numpy(x_0).reshape(2)
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
 def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
+    x_0 = as_numpy(x_0).reshape(2)
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
 

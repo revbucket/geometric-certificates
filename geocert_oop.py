@@ -126,7 +126,7 @@ class BatchGeocert(object):
                     'l_2': Face.l2_dist}[norm]
 
         x = x.reshape(-1, 1)
-        min_dist = min(dist_fxn(facet, x) for facet in boundary)
+        min_dist = min(dist_fxn(facet, x)[0] for facet in boundary)
         return min_dist, boundary, shared_facets
 
 
@@ -149,6 +149,7 @@ class HeapElement(object):
         self.facet = facet
         self.decision_bound = decision_bound
         self.exact_or_estimate = exact_or_estimate
+        self.projection = None
 
     def __lt__(self, other):
         return self.lp_dist < other.lp_dist
@@ -213,7 +214,8 @@ class IncrementalGeoCert(object):
             upper_bound_dict = {'upper_bound': self.upper_bound,
                                 'x': self.x,
                                 'lp_norm': self.lp_norm,
-                                'hypercube': [0.0, 1.0]}
+                                'hypercube': [-1.0, 1.0]}    #TODO: HACKed for exp. 8
+
 
 
         new_facets, rejects = self.facet_config_fxn(poly,
@@ -238,16 +240,18 @@ class IncrementalGeoCert(object):
                 popped_facet.facet.check_same_facet_config(facet):
                 handled_popped_facet = True
                 continue
-            facet_distance = self.lp_dist(facet, self.x)
+            facet_distance, projection = self.lp_dist(facet, self.x)
             heap_el = HeapElement(facet_distance, facet, decision_bound=False,
                                   exact_or_estimate='exact')
+            heap_el.projection = projection
             heapq.heappush(self.pq, heap_el)
 
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
-            facet_distance = self.lp_dist(facet, self.x)
+            facet_distance, projection = self.lp_dist(facet, self.x)
             heap_el = HeapElement(facet_distance, facet, decision_bound=True,
                                   exact_or_estimate='exact')
+            heap_el.projection = projection
             heapq.heappush(self.pq, heap_el)
 
             # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
@@ -284,6 +288,7 @@ class IncrementalGeoCert(object):
         cw_bound = None
         upper_bound_dist = None
         if compute_upper_bound:
+            print('Starting CW upper bound')
             # Do a carlini wagner L2 and if it's successful we have a great
             # upper bound!
             if lp_norm == 'l_2':
@@ -342,7 +347,9 @@ class IncrementalGeoCert(object):
                 self._verbose_print("DIST: ", pop_el.lp_dist)
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
-                return pop_el.lp_dist, cw_bound
+                adver_examp = pop_el.projection
+
+                return pop_el.lp_dist, cw_bound, adver_examp
 
             # Otherwise, open up a new polytope and explore
             else:
