@@ -6,19 +6,21 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 from pathos.multiprocessing import ProcessingPool as Pool
 from cvxopt import matrix, solvers
+solvers.options['show_progress'] = False
 import copy
 
+import time
 ##########################################################################
 #                                                                        #
 #                   POLYTOPE AND FACE CLASSES                            #
 #                                                                        #
 ##########################################################################
-def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound, 
-                 check_feasible, net, config):        
+def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound,
+                 check_feasible, net, config):
     facets = []
     reject_reasons = {}
     if facet_index in redundant:
-        return facets, reject_reasons 
+        return facets, reject_reasons
     facet = Face(ub_A, ub_b, [facet_index], config)
 
     if upper_bound is not None:
@@ -29,7 +31,7 @@ def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound,
 
     if check_feasible:
         facet.check_feasible()
-    if not facet.is_feasible:                
+    if not facet.is_feasible:
         reject_reasons['infeasible'] =\
                                  reject_reasons.get('infeasible', 0) + 1
     else:
@@ -37,18 +39,18 @@ def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound,
 
     facet.check_facet()
     if facet.is_facet:
-        # Check to see if facet is shared with a seen polytope                
+        # Check to see if facet is shared with a seen polytope
         new_configs = facet.get_new_configs(net)
         new_configs_flat = utils.flatten_config(new_configs)
         shared_facet_bools = [new_configs_flat == other_config_flat
                               for other_config_flat in seen_dict]
         if not any(shared_facet_bools):
-            facets.append(facet)                
+            facets.append(facet)
 
     return facets, reject_reasons
 
 
-def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict, 
+def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict,
                    seen_dict, net):
     facet = Face(ub_A, ub_b, [tight_idx], config=config)
 
@@ -62,18 +64,18 @@ def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict,
     if not facet.is_feasible:
         return (False, 'infeasible')
 
-    facet.check_facet() 
+    facet.check_facet()
     if facet.is_facet:
         new_configs = facet.get_new_configs(net)
         new_configs_flat = utils.flatten_config(new_configs)
         shared_facet_bools = [new_configs_flat == other_config_flat
                                for other_config_flat in seen_dict]
         if not any(shared_facet_bools):
-            return (True, facet)                
+            return (True, facet)
         else:
             return (False, 'shared')
     else:
-        return (False, 'not-facet') 
+        return (False, 'not-facet')
 
 def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     facet = Face(ub_A, ub_b, [tight_idx], config=config)
@@ -88,7 +90,7 @@ def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     if not facet.is_feasible:
         return (False, 'infeasible')
 
-    facet.check_facet() 
+    facet.check_facet()
     return (True, facet)
 
 def finish_handle_facet_3(facet, config, seen_dict, net):
@@ -98,13 +100,13 @@ def finish_handle_facet_3(facet, config, seen_dict, net):
         shared_facet_bools = [new_configs_flat == other_config_flat
                                for other_config_flat in seen_dict]
         if not any(shared_facet_bools):
-            return (True, facet)                
+            return (True, facet)
         else:
             return (False, 'shared')
     else:
-        return (False, 'not-facet') 
+        return (False, 'not-facet')
 
-    
+
 
 def from_polytope_dict(polytope_dict):
     return Polytope(polytope_dict['poly_a'],
@@ -142,22 +144,22 @@ class Polytope(object):
 
 
 
-    def generate_facets_configs_parallel_2(self, seen_polytopes_dict, net, 
-                                         check_feasible=False, 
-                                         upper_bound_dict=None, 
+    def generate_facets_configs_parallel_2(self, seen_polytopes_dict, net,
+                                         check_feasible=False,
+                                         upper_bound_dict=None,
                                          use_clarkson=False):
 
         ######################################################################
         #   Set up global variables and subprocess to be pooled out          #
         ######################################################################
-        
-        global pool_ub_A 
-        pool_ub_A = self.ub_A 
 
-        global pool_ub_b 
-        pool_ub_b = self.ub_b 
+        global pool_ub_A
+        pool_ub_A = self.ub_A
 
-        global pool_upper_bound_dict 
+        global pool_ub_b
+        pool_ub_b = self.ub_b
+
+        global pool_upper_bound_dict
         pool_upper_bound_dict = upper_bound_dict
 
         global pool_seen_polytope_dict
@@ -166,40 +168,40 @@ class Polytope(object):
         global pool_check_feasible
         pool_check_feasible = check_feasible
 
-        global pool_net 
-        pool_net = net 
+        global pool_net
+        pool_net = net
 
-        global pool_config 
+        global pool_config
         pool_config = self.config
 
 
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
-        
+
         pool = mp.Pool(processes=4)
-        maplist = [] 
+        maplist = []
         for idx in range(self.ub_A.shape[0]):
             new_uba = np.array(pool_ub_A, copy=True)
             new_ubb = np.array(pool_ub_b, copy=True)
             new_config = copy.deepcopy(pool_config)
             new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
-            maplist.append((new_uba, new_ubb, idx, new_config, 
+            maplist.append((new_uba, new_ubb, idx, new_config,
                             new_upper_bound_dict))
 
         results = [pool.apply_async(handle_facet_3, el) for el in maplist]
         outputs = [res.get() for res in results]
-        new_outputs = [] 
+        new_outputs = []
         for status, output in outputs:
             if status:
-                new_outputs.append(finish_handle_facet_3(output, pool_config, 
-                                                         seen_polytopes_dict, 
+                new_outputs.append(finish_handle_facet_3(output, pool_config,
+                                                         seen_polytopes_dict,
                                                          net))
             else:
                 new_outputs.append((status, output))
 
         facets = []
-        reject_dict = {} 
+        reject_dict = {}
         for status, output in new_outputs:
             if status:
                 facets.append(output)
@@ -208,30 +210,30 @@ class Polytope(object):
         return facets, reject_dict
 
 
-    def generate_facets_configs_parallel(self, seen_polytopes_dict, net, 
-                                         check_feasible=False, 
-                                         upper_bound_dict=None, 
+    def generate_facets_configs_parallel(self, seen_polytopes_dict, net,
+                                         check_feasible=False,
+                                         upper_bound_dict=None,
                                          use_clarkson=True):
 
         ######################################################################
         #   Set up global variables and subprocess to be pooled out          #
         ######################################################################
-        
-        global pool_ub_A 
-        pool_ub_A = self.ub_A 
 
-        global pool_ub_b 
-        pool_ub_b = self.ub_b 
+        global pool_ub_A
+        pool_ub_A = self.ub_A
 
-        global pool_redundant_set 
-        pool_redundant_set = set() 
+        global pool_ub_b
+        pool_ub_b = self.ub_b
+
+        global pool_redundant_set
+        pool_redundant_set = set()
         if check_feasible and use_clarkson:
             pool_redundant_set = self.clarkson_redundancy_set(
                                                             self.interior_point)
             print("Clarkson found %s redundant constraints" % \
                   len(pool_redundant_set))
 
-        global pool_upper_bound_dict 
+        global pool_upper_bound_dict
         pool_upper_bound_dict = upper_bound_dict
 
         global pool_seen_polytope_dict
@@ -240,36 +242,36 @@ class Polytope(object):
         global pool_check_feasible
         pool_check_feasible = check_feasible
 
-        global pool_net 
-        pool_net = net 
+        global pool_net
+        pool_net = net
 
-        global pool_config 
+        global pool_config
         pool_config = self.config
 
 
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
-        
+
         pool = mp.Pool(processes=4)
-        maplist = [] 
+        maplist = []
         for idx in range(self.ub_A.shape[0]):
-            maplist.append((idx, pool_ub_b, pool_ub_A, pool_redundant_set, 
-                            pool_seen_polytope_dict, pool_upper_bound_dict, 
+            maplist.append((idx, pool_ub_b, pool_ub_A, pool_redundant_set,
+                            pool_seen_polytope_dict, pool_upper_bound_dict,
                             check_feasible, pool_net, pool_config))
 
         facets_out = []
-        rejects_out = [] 
-        results = [pool.apply_async(handle_facet, maplist_el) for 
-                   maplist_el in maplist]            
+        rejects_out = []
+        results = [pool.apply_async(handle_facet, maplist_el) for
+                   maplist_el in maplist]
 
         facets_out, rejects_out = zip(*[result.get() for result in results])
-            
+
 
         #facets_out, rejects_out = zip(*res)
         #facets_out, rejects_out = zip(*pool.map(handle_facet, maplist))
 
-        faces_total = [facet for facet_list in facets_out 
+        faces_total = [facet for facet_list in facets_out
                              for facet in facet_list]
         rejects_total = {}
         for reject in rejects_out:
@@ -308,35 +310,35 @@ class Polytope(object):
 
             if check_feasible:
                 facet.check_feasible()
-            if not facet.is_feasible:                
+            if not facet.is_feasible:
                 reject_reasons['infeasible'] = reject_reasons.get('infeasible', 0) + 1
             else:
                 assert i not in redundant_set
 
             facet.check_facet()
             if facet.is_facet:
-                # Check to see if facet is shared with a seen polytope                
+                # Check to see if facet is shared with a seen polytope
                 new_configs = facet.get_new_configs(net)
                 new_configs_flat = utils.flatten_config(new_configs)
                 shared_facet_bools = [new_configs_flat == other_config_flat
                                       for other_config_flat in seen_polytopes_dict]
                 if not any(shared_facet_bools):
-                    facets.append(facet)                
+                    facets.append(facet)
 
         return facets, reject_reasons
 
 
 
-    def generate_facets_configs_2(self, seen_polytopes_dict, net, 
+    def generate_facets_configs_2(self, seen_polytopes_dict, net,
                                   check_feasible=False, upper_bound_dict=None,
                                   use_clarkson=True):
         """ Generates all (n-1) dimensional facets of polytope which aren't
             shared with other polytopes in list. (for ReLu nets)
 
             Strategies to calculate redundant constraints:
-            (1) Remove unnecessary constraints with upper bound dict             
-            (2) Remove redundant constraints with Clarksons 
-            (3) Check upperbound + 
+            (1) Remove unnecessary constraints with upper bound dict
+            (2) Remove redundant constraints with Clarksons
+            (3) Check upperbound +
             (4) Check feasibility with uniform polytope sampling
             ORDER: (1) -> (3) -> (2) [and do (4) before (2)]
         """
@@ -345,15 +347,15 @@ class Polytope(object):
         #   Step 0: Setup things we'll need                                  #
         ######################################################################
         num_constraints = self.ub_A.shape[0]
-        relevant_facets = [] 
+        relevant_facets = []
 
         # True for unnecessary constraints, false ow. Shared amongst facets
-        removal_list = np.full(num_constraints, False) 
-        reject_reasons = dict() # For logging        
+        removal_list = np.full(num_constraints, False)
+        reject_reasons = dict() # For logging
 
         # Make all the facets first, and then only select the ones that matter
-        base_facets = [Face(self.ub_A, self.ub_b, [i], 
-                            config=self.config, removal_list=removal_list) 
+        base_facets = [Face(self.ub_A, self.ub_b, [i],
+                            config=self.config, removal_list=removal_list)
                        for i in range(num_constraints)]
         ######################################################################
         #   Step 1: Remove unnecessary constraints with upper bound dict     #
@@ -402,9 +404,13 @@ class Polytope(object):
         surviving_facets = []
         for i, facet in enumerate(base_facets):
             if removal_list[i]:
-                continue 
+                continue
             else:
-                facet.check_facet() 
+                start = time.time()
+                facet.check_facet()
+                end = time.time()
+                if (end - start ) > 2.0:
+                    print("FACET CHECK TOOK ", end - start)
                 if facet.is_facet:
                     new_configs = facet.get_new_configs(net)
                     new_configs_flat = utils.flatten_config(new_configs)
@@ -413,8 +419,8 @@ class Polytope(object):
                     for other_config_flat in seen_polytopes_dict:
                         if new_configs == other_config_flat:
                             seen_this_facet = True
-                            break 
-                    if not seen_this_facet: 
+                            break
+                    if not seen_this_facet:
                         surviving_facets.append(facet)
 
         return surviving_facets, reject_reasons
@@ -458,23 +464,23 @@ class Polytope(object):
         """ Returns the set of indices of constraints which are redundant, done
             using Clarkson's algorithm: potentially much faster.
 
-            By being careful, we can do better than regular Clarksons. Since we 
-            have access to a 'removal list' where things that are removed come 
+            By being careful, we can do better than regular Clarksons. Since we
+            have access to a 'removal list' where things that are removed come
             from not having a projection within the upper-bound-ball.
-            The idea here is that we don't have to use these removed constraints 
-            in our LP, but we can use them in our rayshoot. 
+            The idea here is that we don't have to use these removed constraints
+            in our LP, but we can use them in our rayshoot.
         ARGS:
             removal_list : boolean np array of length m or None.
         RETURNS:
-            boolean numpy array with True in the indices which correspond to 
+            boolean numpy array with True in the indices which correspond to
             redundant constraints
         """
 
         ##################################################################
         #   Setups of things                                             #
         ##################################################################
-        
-        num_constraints = self.ub_A.shape[0]        
+
+        num_constraints = self.ub_A.shape[0]
         active_indices = np.full(num_constraints, False)
         interior_point = self._interior_point()
 
@@ -488,30 +494,30 @@ class Polytope(object):
                 continue
             else:
                 true_dix = lambda arr: [i for i, el in enumerate(arr) if el]
-                redundant, opt_pt = self._clarkson_lp_removal(i, active_indices, 
+                redundant, opt_pt = self._clarkson_lp_removal(i, active_indices,
                                                               removal_list)
                 if not redundant:
                     # If not redundant, then a rayshoot returns an essential idx
                     active_idx = self._clarkson_rayshoot(interior_point, opt_pt)
                     if removal_list[active_idx]:
-                       pass 
+                       pass
                        # If hits a removed index, no need to add to active idxs
                     else:
-                        active_indices[active_idx] = True 
+                        active_indices[active_idx] = True
                         #redundant_constraints[i] = True
         return ~active_indices
 
 
     def _clarkson_lp_removal(self, i, active_indices, removal_list):
         """ For index i, does the linear_program:
-        max <A[i], x> 
+        max <A[i], x>
         st. A'X <= b'  [for A':= A[active_indices], b':=b[active_indices]]
             <A[i], x> <= b[i] + 1
         And then returns (is_redundant, optimal_point)
         Where is_redundant is True iff the optimal value is < b[i]
         """
 
-        c = self.ub_A[i] 
+        c = self.ub_A[i]
         if not any(active_indices): # base case, nothing is redundant
             #TODO: this doesn't work when self.interior_point is NONE
             return (False, self.interior_point + c) # Just need the direction
@@ -529,7 +535,7 @@ class Polytope(object):
 
         bounds = [(None, None) for _ in c]
         linprog_result = opt.linprog(-c,  # max A[i]x
-                                     A_ub=linprog_a, 
+                                     A_ub=linprog_a,
                                      b_ub=linprog_b,
                                      bounds=bounds,
                                      method='interior-point')
@@ -551,7 +557,7 @@ class Polytope(object):
         """ Returns the set of indices of constraints which are redundant, done
             using Clarkson's algorithm: potentially much faster.
 
-            By being careful, we can do better than regular Clarksons. 
+            By being careful, we can do better than regular Clarksons.
         ARGS:
             interior_point : np.Array - if not None, is a point for which
                              ub_A * interior_point < ub_b [strictly]. If None,
@@ -566,8 +572,8 @@ class Polytope(object):
         ######################################################################
         #   Setup stuff                                                      #
         ######################################################################
-        
-        num_constraints = self.ub_A.shape[0]        
+
+        num_constraints = self.ub_A.shape[0]
         redundant_constraints = set()
         active_indices = np.full(num_constraints, False)
         # Need to find an interior point from which to shoot rays
@@ -578,7 +584,7 @@ class Polytope(object):
         #######################################################################
         #   Loop through all constraints and find the ones that are redundant #
         #######################################################################
-        
+
         for index_to_test in range(num_constraints):
             redundant, opt_pt = self._clarkson_lp(index_to_test, active_indices)
             if not redundant:
@@ -640,15 +646,15 @@ class Polytope(object):
         """
         c = self.ub_A[index_to_test]
         if not any(active_indices): # base case
-            return (False, self.interior_point + c)        
+            return (False, self.interior_point + c)
         bounds = [(0.0, 1.0) for _ in c]
         active_indices[index_to_test] = True # just temporarily
 
         selected_ub_A = self.ub_A[active_indices]
-        
+
         # Need to find index of index_to_test in active_indices
         index_map = sum(active_indices[:index_to_test])
-        
+
         selected_ub_b = self.ub_b[active_indices] # maybe need [0] first
 
         upper_bound = self.ub_b[index_to_test] # maybe need [0] first
@@ -662,11 +668,11 @@ class Polytope(object):
         active_indices[index_to_test] = False # Reset back to normal
 
         if (linprog_result.status == 3) or (-linprog_result.fun > upper_bound):
-            # Not a redundant constraint 
+            # Not a redundant constraint
             return (False, linprog_result.x) # Maybe something weird here?
 
         else:
-            return (True, linprog_result.x) 
+            return (True, linprog_result.x)
 
 
     def _interior_point(self):
@@ -699,11 +705,23 @@ class Polytope(object):
         b_ub = self.ub_b
 
         try:
-            b_ub = np.hstack((b_ub, np.array([[0]])))            
+            b_ub = np.hstack((b_ub, np.array([[0]])))
         except:
-            b_ub = np.hstack((b_ub, np.array([0])))       
+            b_ub = np.hstack((b_ub, np.array([0])))
 
         bounds = [(None, None) for _ in c]
+
+        linprog_result = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub))
+        if linprog_result['status'] == 'optimal':
+            if linprog_result['primal objective'] < 0:
+                self.interior_point = np.array(linprog_result['x'])[:-1].squeeze()
+            else:
+                self.interior_point = 'not-full-dimension'
+        else:
+            print("LINPROG STATUS", linprog_result['status'])
+            aoestuhoae
+        return self.interior_point
+
         linprog_result = opt.linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds,
                                      method='interior-point', options={'presolve':True})
 
@@ -720,8 +738,8 @@ class Polytope(object):
         elif linprog_result.status == 2:
             self.interior_point = 'infeasible'
 
-        if self.interior_point is None: 
-            print("NO INTERIOR POINT?", linprog_result.status, 
+        if self.interior_point is None:
+            print("NO INTERIOR POINT?", linprog_result.status,
                   linprog_result.fun, linprog_result.x)
 
 
@@ -769,7 +787,7 @@ class Polytope(object):
 
 
 class Face(Polytope):
-    def __init__(self, poly_a, poly_b, tight_list, config=None, 
+    def __init__(self, poly_a, poly_b, tight_list, config=None,
                  removal_list=None):
         super(Face, self).__init__(poly_a, poly_b, config=config)
         self.poly_a = poly_a
@@ -795,13 +813,20 @@ class Face(Polytope):
 
         bounds = [(None, None) for _ in c]
 
-        linprog_result = opt.linprog(c,
-                                     A_ub=self.poly_a,
-                                     b_ub=self.poly_b,
-                                     A_eq=self.a_eq,
-                                     b_eq=self.b_eq,
-                                     bounds=bounds, method='interior-point', options={'presolve':True})
-        is_feasible = (linprog_result.status == 0)
+        cvxopt_out = solvers.lp(matrix(c), matrix(self.poly_a), matrix(self.poly_b),
+                                A=matrix(self.a_eq), b=matrix(self.b_eq), solver='glpk')
+
+        self.is_feasible = (cvxopt_out['status'] == 'optimal')
+        return self.is_feasible
+
+
+        # linprog_result = opt.linprog(c,
+        #                              A_ub=self.poly_a,
+        #                              b_ub=self.poly_b,
+        #                              A_eq=self.a_eq,
+        #                              b_eq=self.b_eq,
+        #                              bounds=bounds, method='interior-point', options={'presolve':True})
+        # is_feasible = (linprog_result.status == 0)
 
         self.is_feasible = is_feasible
         return self.is_feasible
@@ -826,13 +851,13 @@ class Face(Polytope):
         # SPEED UP WITH REMOVAL LIST!
 
         if self.removal_list is not None:
-            map_idx = sum(~self.removal_list[:self.tight_list[0]])        
+            map_idx = sum(~self.removal_list[:self.tight_list[0]])
             saved_row = self.poly_a[self.tight_list[0]]
 
             new_poly_a = self.poly_a[~self.removal_list]
             new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
-            new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))        
-            new_poly_a[-1][-1] = -1 
+            new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))
+            new_poly_a[-1][-1] = -1
             new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
 
             new_poly_b = self.poly_b[~self.removal_list]
@@ -1080,9 +1105,26 @@ class Face(Polytope):
 
         # bounds = [(0, None)] + [(None, None) for _ in range(n)]
         # bounds = [(0, None), (-100, 100), (-3.141593, 3.141593), (-3.141593, 3.141593), (-100,100), (-100,100)]    #TODO: HACKed for exp. 8
-        bounds = [(0, None), (-0.32842287715105956, 0.6798577687061284), (-0.5000000551328638, 0.5000000551328638), (-0.5000000551328638, 0.5000000551328638), (-0.5, 0.5), (-0.5, 0.5)]
+        BASE_BOUNDS = [(-0.32842287715105956, 0.6798577687061284),
+                       (-0.5, 0.5),
+                       (-0.5, 0.5),
+                       (-0.5, 0.5),
+                       (-0.5, 0.5)]
+
+        new_bounds = [(BASE_BOUNDS[i][0] - x[i], BASE_BOUNDS[i][1] - x[i])
+                      for i in range(len(x))]
+
+        bounds = [(0, None)] + new_bounds
 
         # Solve linprog
+
+        cvxopt_out = solvers.lp(matrix(c), matrix(ub_a), matrix(ub_b),
+                               A=matrix(constraint_2a), b=matrix(constraint_2b),
+                               solver='glpk')
+        if cvxopt_out['status'] == 'optimal':
+            return cvxopt_out['primal objective'], \
+                   (x + np.array(cvxopt_out['x'])[1:])
+
         linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
                                         A_eq=constraint_2a,
                                         b_eq=constraint_2b,

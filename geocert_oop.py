@@ -214,7 +214,8 @@ class IncrementalGeoCert(object):
             upper_bound_dict = {'upper_bound': self.upper_bound,
                                 'x': self.x,
                                 'lp_norm': self.lp_norm,
-                                'hypercube': [-1.0, 1.0]}    #TODO: HACKed for exp. 8
+                                #'hypercube': [-1.0, 1.0]
+                                }    #TODO: HACKed for exp. 8
 
 
 
