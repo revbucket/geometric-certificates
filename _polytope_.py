@@ -368,16 +368,27 @@ class Polytope(object):
 
         ######################################################################
         #   Step 2: Secondary upper bound checks                             #
-        ######################################################################        
-        # TODO: maybe this is fast?
+        ######################################################################
+
+        current_facets = [facet for facet in base_facets if removal_list[facet.tight_list[0]] != True]
+        results = self.reject_via_ellipse(current_facets)
+
+        for result in results:
+            status, reason, i = result
+            if status:
+                removal_list[i] = True # automatically broadcasted to facets
+                reject_reasons[reason] = reject_reasons.get(reason, 0) + 1
+
+        print("Ellipse method found %s redundant constraints" % np.sum([1 for result in results if result[0]==True]))
 
         ######################################################################
         #   Step Final-1: Remove redundant constraints with Clarksons        #
         ######################################################################
 
-        redundant_list = self.clarkson_with_removal(removal_list)   
+        redundant_list = self.clarkson_with_removal(removal_list)
 
         clarkson_count = sum(redundant_list & (~removal_list))
+        print("Clarkson found %s redundant constraints" % clarkson_count)
         #print("Clarkson found %02d redundant constraints" % clarkson_count)
         reject_reasons['redundant'] = clarkson_count
 
@@ -694,7 +705,7 @@ class Polytope(object):
 
         bounds = [(None, None) for _ in c]
         linprog_result = opt.linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds,
-                                     method='interior-point')
+                                     method='interior-point', options={'presolve':True})
 
         if linprog_result.status in [0, 4]:
             if linprog_result.fun < 0:
@@ -717,6 +728,44 @@ class Polytope(object):
         return self.interior_point
 
 
+    def reject_via_ellipse(self, facets):
+        ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
+            at the boundary of the ellipse + projecting onto constraint from point if not tight
+
+            Removes redundant constraint by finding an approximation to the
+            minimum volume circumscribing ellipsoid. Done by solving maximum
+            volume inscribed ellipsoid and multiplying by dimenion n. Ellipse
+            E(P, c) is defined by Pos. Def. matrix P and center c.
+
+            returns:   'redundant_list' [True if red. | False if non-red | None if unknown]
+        '''
+
+        # Find min. vol. inscribed ellipse
+        P, c = utils.MVIE_ellipse(self.ub_A, self.ub_b)
+        P = np.asarray(P)
+        c = np.asarray(c)
+
+        # Approximate max. vol. circum. ellipse (provable bounds polytope)
+        n = np.shape(self.ub_A)[1]
+        P_outer = np.multiply(n, P)
+
+        # Remove Redundant constraints
+        # constraint a_i redundant if below holds:
+        # max <a_i, y> <= b_i for all y in E(P, c))
+        #
+        # equivalent to: ||P.T*a_i||_2 + a_i.T*c <= b_i
+        # (max has a closed form)
+
+        results = []
+        for facet in facets:
+            # Find Redundant constraints
+            lhs = np.linalg.norm(np.matmul(P_outer.T, self.ub_A[facet.tight_list].T)) + np.dot(
+                self.ub_A[facet.tight_list], c)
+            rhs = self.ub_b[facet.tight_list]
+            if lhs <= rhs:
+                results.append((True, 'ellipse_upper_bound', facet.tight_list))
+
+        return results
 
 
 class Face(Polytope):
@@ -751,7 +800,7 @@ class Face(Polytope):
                                      b_ub=self.poly_b,
                                      A_eq=self.a_eq,
                                      b_eq=self.b_eq,
-                                     bounds=bounds)
+                                     bounds=bounds, method='interior-point', options={'presolve':True})
         is_feasible = (linprog_result.status == 0)
 
         self.is_feasible = is_feasible
@@ -814,7 +863,7 @@ class Face(Polytope):
                                      b_ub=new_poly_b, #self.poly_b,
                                      A_eq=a_eq_new,
                                      b_eq=self.b_eq,
-                                     bounds=bounds, method='interior-point')
+                                     bounds=bounds, method='interior-point', options={'presolve':True})
 
         if linprog_result.status == 0:
             self.is_facet = True
@@ -1036,7 +1085,7 @@ class Face(Polytope):
         linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
                                         A_eq=constraint_2a,
                                         b_eq=constraint_2b,
-                                        bounds=bounds)
+                                        bounds=bounds, method='interior-point')
 
         if linprog_result.status == 0:
             return linprog_result.fun, x + linprog_result.x[1:].reshape(n,-1)     # include projection x + v_opt
@@ -1123,7 +1172,6 @@ class Face(Polytope):
 
 
         return False, None
-
 
 
     def get_inequality_constraints(self):

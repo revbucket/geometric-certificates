@@ -214,7 +214,7 @@ class IncrementalGeoCert(object):
             upper_bound_dict = {'upper_bound': self.upper_bound,
                                 'x': self.x,
                                 'lp_norm': self.lp_norm,
-                                'hypercube': [0.0, 1.0]}
+                                'hypercube': [-0.1, 0.1]}    #TODO: set for experiment 8
 
 
         new_facets, rejects = self.facet_config_fxn(poly,
@@ -287,6 +287,7 @@ class IncrementalGeoCert(object):
         cw_bound = None
         upper_bound_dist = None
         if compute_upper_bound:
+            print('Starting CW upper bound')
             # Do a carlini wagner L2 and if it's successful we have a great
             # upper bound!
             if lp_norm == 'l_2':
