@@ -1078,14 +1078,15 @@ class Face(Polytope):
         ub_a = np.vstack((constraint_1a, constraint_3a, constraint_4a))
         ub_b = np.hstack((constraint_1b, constraint_3b, constraint_4b))
 
-        bounds = [(0, None)] + [(None, None) for _ in range(n)]
-
+        # bounds = [(0, None)] + [(None, None) for _ in range(n)]
+        # bounds = [(0, None), (-100, 100), (-3.141593, 3.141593), (-3.141593, 3.141593), (-100,100), (-100,100)]    #TODO: HACKed for exp. 8
+        bounds = [(0, None), (-0.32842287715105956, 0.6798577687061284), (-0.5000000551328638, 0.5000000551328638), (-0.5000000551328638, 0.5000000551328638), (-0.5, 0.5), (-0.5, 0.5)]
 
         # Solve linprog
         linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
                                         A_eq=constraint_2a,
                                         b_eq=constraint_2b,
-                                        bounds=bounds, method='interior-point')
+                                        bounds=bounds, method='interior-point', options={'presolve':True})
 
         if linprog_result.status == 0:
             return linprog_result.fun, x + linprog_result.x[1:].reshape(n,-1)     # include projection x + v_opt
