@@ -1,5 +1,6 @@
 import utilities as utils
 import torch
+import os
 import numpy as np
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
@@ -7,12 +8,20 @@ import multiprocessing as mp
 from pathos.multiprocessing import ProcessingPool as Pool
 from cvxopt import matrix, solvers
 import copy
+import pickle
+from _facet_ import Face
+import joblib 
 
 ##########################################################################
 #                                                                        #
 #                   POLYTOPE AND FACE CLASSES                            #
 #                                                                        #
 ##########################################################################
+
+def fast_fxn(j):
+    x = len(j) 
+    return x
+
 def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound, 
                  check_feasible, net, config):        
     facets = []
@@ -77,7 +86,7 @@ def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict,
 
 def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     facet = Face(ub_A, ub_b, [tight_idx], config=config)
-
+    #print("PID: ", os.getpid(), " TIGHT LIST:", tight_idx)
     if upper_bound_dict is not None:
         reject_status, reason = facet.reject_via_upper_bound(upper_bound_dict)
         if reject_status:
@@ -91,7 +100,16 @@ def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     facet.check_facet() 
     return (True, facet)
 
+
+def handle_facet_3_star(args):
+    try:
+        return handle_facet_3(*args)
+    except:
+        print("ERRORR!?!?!?!?!?!?!?!?!??!")
+
 def finish_handle_facet_3(facet, config, seen_dict, net):
+
+
     if facet.is_facet:
         new_configs = facet.get_new_configs(net)
         new_configs_flat = utils.flatten_config(new_configs)
@@ -150,62 +168,58 @@ class Polytope(object):
         ######################################################################
         #   Set up global variables and subprocess to be pooled out          #
         ######################################################################
-        
-        global pool_ub_A 
-        pool_ub_A = self.ub_A 
-
-        global pool_ub_b 
-        pool_ub_b = self.ub_b 
-
-        global pool_upper_bound_dict 
-        pool_upper_bound_dict = upper_bound_dict
-
-        global pool_seen_polytope_dict
-        pool_seen_polytope_dict = seen_polytopes_dict
-
-        global pool_check_feasible
-        pool_check_feasible = check_feasible
-
-        global pool_net 
-        pool_net = net 
-
-        global pool_config 
-        pool_config = self.config
-
 
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
+
+        global uba
+        uba = self.ub_A
         
-        pool = mp.Pool(processes=4)
+        global ubb 
+        ubb = self.ub_b 
+
+        global conf
+        conf = self.config 
+
+        global ubdict 
+        ubdict = upper_bound_dict
+        
+        
         maplist = [] 
+
         for idx in range(self.ub_A.shape[0]):
-            new_uba = np.array(pool_ub_A, copy=True)
-            new_ubb = np.array(pool_ub_b, copy=True)
-            new_config = copy.deepcopy(pool_config)
-            new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
-            maplist.append((new_uba, new_ubb, idx, new_config, 
-                            new_upper_bound_dict))
-
-        results = [pool.apply_async(handle_facet_3, el) for el in maplist]
-        outputs = [res.get() for res in results]
-        new_outputs = [] 
-        for status, output in outputs:
-            if status:
-                new_outputs.append(finish_handle_facet_3(output, pool_config, 
-                                                         seen_polytopes_dict, 
-                                                         net))
-            else:
-                new_outputs.append((status, output))
-
-        facets = []
-        reject_dict = {} 
-        for status, output in new_outputs:
-            if status:
-                facets.append(output)
-            else:
-                reject_dict[output] = reject_dict.get(output, 0) + 1
-        return facets, reject_dict
+            # new_uba = np.array(self.ub_A, copy=True)
+            # new_ubb = np.array(self.ub_b, copy=True)
+            # new_config = copy.deepcopy(self.config)
+            # new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
+            maplist.append((uba, ubb, idx, conf, ubdict))
+            
+        
+            #results = [pool.apply_async(handle_facet_3, el) for el in maplist]
+        
+        outputs = joblib.Parallel(n_jobs=20)(joblib.delayed(handle_facet_3_star)(arg) for arg in maplist)
+        
+        if True:
+            #proclist = [pool.apply_async(handle_facet_3_star, (args,)) for args in maplist]
+            #outputs = [res.get() for res in proclist]
+            #outputs = pool.map(handle_facet_3_star, maplist)
+            new_outputs = [] 
+            for status, output in outputs:
+                if status:
+                    new_outputs.append(finish_handle_facet_3(output, self.config, 
+                                                             seen_polytopes_dict, 
+                                                             net))
+                else:
+                    new_outputs.append((status, output))
+            facets = []
+            reject_dict = {} 
+            for status, output in new_outputs:
+                if status:
+                    facets.append(output)
+                else:
+                    reject_dict[output] = reject_dict.get(output, 0) + 1
+            return facets, reject_dict
 
 
     def generate_facets_configs_parallel(self, seen_polytopes_dict, net, 
@@ -728,6 +742,8 @@ class Polytope(object):
         return self.interior_point
 
 
+<<<<<<< HEAD
+=======
     def reject_via_ellipse(self, facets):
         ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
             at the boundary of the ellipse + projecting onto constraint from point if not tight
