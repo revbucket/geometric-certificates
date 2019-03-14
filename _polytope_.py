@@ -1,5 +1,6 @@
 import utilities as utils
 import torch
+import os
 import numpy as np
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
@@ -7,12 +8,20 @@ import multiprocessing as mp
 from pathos.multiprocessing import ProcessingPool as Pool
 from cvxopt import matrix, solvers
 import copy
+import pickle
+from _facet_ import Face
+import joblib 
 
 ##########################################################################
 #                                                                        #
 #                   POLYTOPE AND FACE CLASSES                            #
 #                                                                        #
 ##########################################################################
+
+def fast_fxn(j):
+    x = len(j) 
+    return x
+
 def handle_facet(facet_index, ub_b, ub_A, redundant, seen_dict, upper_bound, 
                  check_feasible, net, config):        
     facets = []
@@ -77,7 +86,7 @@ def handle_facet_2(ub_A, ub_b, tight_idx, config, upper_bound_dict,
 
 def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     facet = Face(ub_A, ub_b, [tight_idx], config=config)
-
+    #print("PID: ", os.getpid(), " TIGHT LIST:", tight_idx)
     if upper_bound_dict is not None:
         reject_status, reason = facet.reject_via_upper_bound(upper_bound_dict)
         if reject_status:
@@ -91,7 +100,16 @@ def handle_facet_3(ub_A, ub_b, tight_idx, config, upper_bound_dict):
     facet.check_facet() 
     return (True, facet)
 
+
+def handle_facet_3_star(args):
+    try:
+        return handle_facet_3(*args)
+    except:
+        print("ERRORR!?!?!?!?!?!?!?!?!??!")
+
 def finish_handle_facet_3(facet, config, seen_dict, net):
+
+
     if facet.is_facet:
         new_configs = facet.get_new_configs(net)
         new_configs_flat = utils.flatten_config(new_configs)
@@ -150,62 +168,58 @@ class Polytope(object):
         ######################################################################
         #   Set up global variables and subprocess to be pooled out          #
         ######################################################################
-        
-        global pool_ub_A 
-        pool_ub_A = self.ub_A 
-
-        global pool_ub_b 
-        pool_ub_b = self.ub_b 
-
-        global pool_upper_bound_dict 
-        pool_upper_bound_dict = upper_bound_dict
-
-        global pool_seen_polytope_dict
-        pool_seen_polytope_dict = seen_polytopes_dict
-
-        global pool_check_feasible
-        pool_check_feasible = check_feasible
-
-        global pool_net 
-        pool_net = net 
-
-        global pool_config 
-        pool_config = self.config
-
 
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
+
+        global uba
+        uba = self.ub_A
         
-        pool = mp.Pool(processes=4)
+        global ubb 
+        ubb = self.ub_b 
+
+        global conf
+        conf = self.config 
+
+        global ubdict 
+        ubdict = upper_bound_dict
+        
+        
         maplist = [] 
+
         for idx in range(self.ub_A.shape[0]):
-            new_uba = np.array(pool_ub_A, copy=True)
-            new_ubb = np.array(pool_ub_b, copy=True)
-            new_config = copy.deepcopy(pool_config)
-            new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
-            maplist.append((new_uba, new_ubb, idx, new_config, 
-                            new_upper_bound_dict))
-
-        results = [pool.apply_async(handle_facet_3, el) for el in maplist]
-        outputs = [res.get() for res in results]
-        new_outputs = [] 
-        for status, output in outputs:
-            if status:
-                new_outputs.append(finish_handle_facet_3(output, pool_config, 
-                                                         seen_polytopes_dict, 
-                                                         net))
-            else:
-                new_outputs.append((status, output))
-
-        facets = []
-        reject_dict = {} 
-        for status, output in new_outputs:
-            if status:
-                facets.append(output)
-            else:
-                reject_dict[output] = reject_dict.get(output, 0) + 1
-        return facets, reject_dict
+            # new_uba = np.array(self.ub_A, copy=True)
+            # new_ubb = np.array(self.ub_b, copy=True)
+            # new_config = copy.deepcopy(self.config)
+            # new_upper_bound_dict = copy.deepcopy(upper_bound_dict)
+            maplist.append((uba, ubb, idx, conf, ubdict))
+            
+        
+            #results = [pool.apply_async(handle_facet_3, el) for el in maplist]
+        
+        outputs = joblib.Parallel(n_jobs=20)(joblib.delayed(handle_facet_3_star)(arg) for arg in maplist)
+        
+        if True:
+            #proclist = [pool.apply_async(handle_facet_3_star, (args,)) for args in maplist]
+            #outputs = [res.get() for res in proclist]
+            #outputs = pool.map(handle_facet_3_star, maplist)
+            new_outputs = [] 
+            for status, output in outputs:
+                if status:
+                    new_outputs.append(finish_handle_facet_3(output, self.config, 
+                                                             seen_polytopes_dict, 
+                                                             net))
+                else:
+                    new_outputs.append((status, output))
+            facets = []
+            reject_dict = {} 
+            for status, output in new_outputs:
+                if status:
+                    facets.append(output)
+                else:
+                    reject_dict[output] = reject_dict.get(output, 0) + 1
+            return facets, reject_dict
 
 
     def generate_facets_configs_parallel(self, seen_polytopes_dict, net, 
@@ -715,419 +729,4 @@ class Polytope(object):
 
         return self.interior_point
 
-
-
-
-class Face(Polytope):
-    def __init__(self, poly_a, poly_b, tight_list, config=None, 
-                 removal_list=None):
-        super(Face, self).__init__(poly_a, poly_b, config=config)
-        self.poly_a = poly_a
-        self.poly_b = poly_b
-        self.a_eq = self.poly_a[tight_list]
-        self.b_eq = self.poly_b[tight_list]
-        self.tight_list = tight_list
-        self.is_feasible = None
-        self.is_facet = None
-        self.interior = None
-        self.removal_list = removal_list
-
-    def check_feasible(self):
-        """ Checks if this polytope is feasible and stores the result"""
-
-        if self.is_feasible is not None:
-            return self.is_feasible
-
-        # Set up feasibility check Linear program
-        c = np.zeros(self.poly_a.shape[1])
-        tight_indices = np.array(sorted(self.tight_list))
-
-
-        bounds = [(None, None) for _ in c]
-
-        linprog_result = opt.linprog(c,
-                                     A_ub=self.poly_a,
-                                     b_ub=self.poly_b,
-                                     A_eq=self.a_eq,
-                                     b_eq=self.b_eq,
-                                     bounds=bounds)
-        is_feasible = (linprog_result.status == 0)
-
-        self.is_feasible = is_feasible
-        return self.is_feasible
-
-    def check_facet(self):
-        """ Checks if this polytope is a (n-1) face and stores the result"""
-        if self.is_facet is not None:
-            return self.is_facet
-
-        if self.is_feasible is not None and not self.is_feasible:
-            self.is_facet = False
-            return self.is_facet
-
-        m, n = self.poly_a.shape
-        # Dimension check of (n-1) facet
-        # Do min 0
-        # st. Ax + t <= b
-        #          t  > 0
-        # and if is_feasible, then good
-        c = np.zeros(n + 1)
-
-        # SPEED UP WITH REMOVAL LIST!
-
-
-        if self.removal_list is not None:
-            map_idx = sum(~self.removal_list[:self.tight_list[0]])        
-            saved_row = self.poly_a[self.tight_list[0]]
-    
-            new_poly_a = self.poly_a[~self.removal_list]
-            new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
-            new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))        
-            new_poly_a[-1][-1] = -1 
-            new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
-
-            new_poly_b = self.poly_b[~self.removal_list]
-            new_poly_b = np.hstack((new_poly_b, 0))
-        else:
-            new_poly_a = np.ones([m, n+1])
-            new_poly_a[:, :-1] = self.poly_a
-            new_poly_a[self.tight_list, -1] = 0
-            new_poly_b = self.poly_b
-        #------
-
-
-
-
-        # Map indices real quick:
-
-
-
-        bounds = [(None, None) for _ in range(n)]
-        bounds.append((1e-11, None))
-
-        m2, n2 = self.a_eq.shape
-        a_eq_new = np.zeros([m2, n+1])
-        a_eq_new[:, :-1] = self.a_eq
-
-        linprog_result = opt.linprog(c,
-                                     A_ub=new_poly_a,
-                                     b_ub=new_poly_b, #self.poly_b,
-                                     A_eq=a_eq_new,
-                                     b_eq=self.b_eq,
-                                     bounds=bounds, method='interior-point')
-
-        if linprog_result.status == 0:
-            self.is_facet = True
-            self.interior = linprog_result.x[0:-1]
-        elif linprog_result == 3:
-            print('error, unbounded, in linprog for check facet')
-
-        return self.is_facet
-
-
-    def _same_hyperplane(self, other):
-        """ Given two facets, checks if they lie in different hyperplanes
-            Returns True if they lie in the same hyperplane
-        """
-        # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
-            return False
-        # if they lie in different hyperplanes, then return False
-        self_tight = self.tight_list[0]
-        self_a = self.poly_a[self_tight, :]
-        self_b = self.poly_b[self_tight]
-
-        other_tight = other.tight_list[0]
-        other_a = other.poly_a[other_tight, :]
-        other_b = other.poly_b[other_tight]
-
-        return utils.is_same_hyperplane(self_a, self_b, other_a, other_b)
-
-    def _same_tight_constraint(self, other):
-        """ Given two facets, checks if their tight constraints are the same
-            Returns True if they are the same
-        """
-        # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
-            return False
-        # if they lie in different hyperplanes, then return False
-        self_tight = self.tight_list[0]
-        self_a = self.poly_a[self_tight, :]
-        self_b = self.poly_b[self_tight]
-
-        other_tight = other.tight_list[0]
-        other_a = other.poly_a[other_tight, :]
-        other_b = other.poly_b[other_tight]
-
-        return utils.is_same_tight_constraint(self_a, self_b, other_a, other_b)
-
-
-
-    def check_same_facet_pg(self, other):
-        """ Checks if this facet is the same as the other facet. Assumes
-            that self and other are perfectly glued if they intersect at all.
-            Uses LP to check if intersection of facets is (n-1) dimensional.
-        """
-        # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
-            return False
-
-        if not self._same_hyperplane(other):
-            return False
-
-        # now just return True if their intersection is dimension (n-1)
-
-        new_tight_list = np.add(other.tight_list, self.poly_b.shape)
-
-        new_face = Face(np.vstack((self.poly_a, other.poly_a)),
-                        np.hstack((self.poly_b, other.poly_b)),
-                        tight_list=np.hstack((self.tight_list, new_tight_list)))
-        return new_face.check_facet()
-
-
-    def check_same_facet_pg_slow(self, other):
-        """ Checks if this facet is the same as the other facet. Assumes
-            that self and other are perfectly glued if they intersect at all
-
-            Method uses PyPi library 'polytope' to compare vertices of the
-            faces
-        """
-
-        # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
-            return False
-
-        if not self._same_hyperplane(other):
-            return False
-
-        P1 = utils.Polytope_2(self.ub_A, self.ub_b)
-        P2 = utils.Polytope_2(other.ub_A, other.ub_b)
-
-        V1 = utils.ptope.extreme(P1)
-        V2 = utils.ptope.extreme(P2)
-
-        V1_ = []
-        if(V1 is not None and V2 is not None):
-            for vertex in V1:
-                flag = utils.fuzzy_equal(np.matmul(self.a_eq, vertex), self.b_eq)
-                if flag:
-                    V1_.append(vertex)
-            V2_ = []
-            for vertex in V2:
-                flag = utils.fuzzy_equal(np.matmul(other.a_eq, vertex), other.b_eq)
-                if flag:
-                    V2_.append(vertex)
-
-            if len(V1_) == len(V2_):
-                flags = []
-                for vertex in V1_:
-                    flags_2 = []
-                    for vertex_2 in V2_:
-                        if np.allclose(vertex, vertex_2, atol=1e-6):
-                            flags_2.append(True)
-                        else:
-                            flags_2.append(False)
-                    flags.append(any(flags_2))
-                return all(flags)
-            else:
-                return False
-        else:
-            return  False
-
-    def check_same_facet_config(self, other):
-        #TODO: fix numerical issues (shared facets aren't being eliminated)
-
-        """ Potentially faster technique to check facets are the same
-            The belief here is that if both (self, other) are facets, with their
-            neuron configs specified, then if they have the same hyperplane and
-            have config hamming distance 1 (plus condition explained below),
-            then they are the same facet
-
-            must account for the case where each polytope can be simulatenously
-            glued (not perfectly glued) to more than one hyperplane. two
-            faces can come from polytopes with ReLu hamming distance one
-            and yet their intersection is not a (n-1) dim. face
-        """
-        if not (self.check_facet() and other.check_facet()):
-            return False
-
-        if not self._same_hyperplane(other):
-            return False
-
-        if self.config is None or other.config is None:
-            return self.check_same_facet_pg(other)
-
-        ReLu_distance_check = (utils.config_hamming_distance(self.config, other.config) == 1)
-
-        return ReLu_distance_check and not self._same_tight_constraint(other)
-
-    def get_new_configs(self, net):
-        ''' Function takes original ReLu configs and flips the activation of
-            the ReLu at index specified in 'tight_boolean_configs'.
-        '''
-        #TODO: this could be improved if tight index was consistent with
-        # order of ReLu configs, but it isn't for some reason?
-        # Solution: find tight ReLu activation by running interior pt through net
-        orig_configs = self.config
-        pre_relus, post_relus = net.relu_config(torch.Tensor(self.interior))
-        tight_boolean_configs = [utils.fuzzy_equal(elem, 0.0, tolerance=1e-6)
-                         for activations in pre_relus for elem in activations]
-
-        new_configs = copy.deepcopy(orig_configs)
-
-        for i, tight_bools in enumerate(tight_boolean_configs):
-            for j, tight_bool in enumerate(tight_bools):
-                if tight_bool == 1:
-                    if orig_configs[i][j] == 1.0:
-                        new_configs[i][j] = 0.0
-                    elif orig_configs[i][j] == 0.0:
-                        new_configs[i][j] = 1.0
-                    else:
-                        raise AttributeError
-
-        return new_configs
-
-    def linf_dist(self, x):
-        #TODO: this method doesn't  seem to always correctly find the projection onto a facet
-
-        """ Returns the l_inf distance to point x using LP"""
-
-        # set up the linear program
-        # min_{t,v} t
-        # s.t.
-        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
-        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
-        # 3)  v <= t * 1           (<==>)    v_i - t <= 0
-        # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
-
-        # optimization variable is [t, v]
-        n = x.shape[0]
-        m = self.poly_a.shape[0]
-        c = np.zeros(n+1)
-        c[0] = 1
-
-        # Constraint 1
-        constraint_1a = np.hstack((np.zeros((m, 1)), self.poly_a))
-        constraint_1b = self.poly_b - np.matmul(self.poly_a, x)[:, 0]
-
-        # Constraint 2
-        constraint_2a = constraint_1a[self.tight_list, :]
-        constraint_2b = self.poly_b[self.tight_list] - np.matmul(self.poly_a[self.tight_list, :], x)
-
-
-        # Constraint 3
-        constraint_3a = np.hstack((-1*np.ones((n, 1)), np.identity(n)))
-        constraint_3b = np.zeros(n)
-
-        # Constraint 4
-        constraint_4a = np.hstack((-1*np.ones((n, 1)), -1*np.identity(n)))
-        constraint_4b = np.zeros(n)
-
-        ub_a = np.vstack((constraint_1a, constraint_3a, constraint_4a))
-        ub_b = np.hstack((constraint_1b, constraint_3b, constraint_4b))
-
-        bounds = [(0, None)] + [(None, None) for _ in range(n)]
-
-
-        # Solve linprog
-        linprog_result = opt.linprog(c, A_ub=ub_a, b_ub=ub_b,
-                                        A_eq=constraint_2a,
-                                        b_eq=constraint_2b,
-                                        bounds=bounds)
-
-        if linprog_result.status == 0:
-            return linprog_result.fun
-        else:
-            raise Exception("LINPROG FAILED: " + linprog_result.message)
-
-
-    def l2_dist(self, x):
-        """ Returns the l_2 distance to point x using LP"""
-
-        # set up the quadratic program
-        # min_{v} v^T*v
-        # s.t.
-        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
-        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
-
-        n = np.shape(x)[0]
-        P = matrix(np.identity(n))
-        G = matrix(self.poly_a)
-        h = matrix(self.poly_b - np.matmul(self.poly_a, x)[:, 0])
-        q = matrix(np.zeros([n, 1]))
-        A = matrix(self.a_eq)
-        b = matrix(self.b_eq - np.matmul(self.a_eq, x))
-
-        quad_program_result = solvers.qp(P, q, G, h, A, b)
-
-        if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
-            x = np.array(quad_program_result['x'])
-            return np.linalg.norm(x)
-        else:
-            raise Exception("QPPROG FAILED: " + quad_program_result['status'])
-
-
-
-    def l2_projection(self, x, lp_norm):
-        """ Computes the l2 distance between point x and the hyperplane that
-            this face lies on. Serves as a lower bound to the l2 distance
-            {y | <a,y> =b}.
-            This is equivalent to (b - <a,x>)/ ||a||_*
-            for ||.||_* being the dual norm
-        """
-        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
-
-        eq_a = self.a_eq
-        eq_b = self.b_eq
-        return (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a, ord=dual_norm)
-
-    def reject_via_upper_bound(self, upper_bound_dict):
-        """ Takes in a dict w/ keys:
-            {'upper_bound': float of upper bound of dist to decision bound,
-             'x': point we're verifying robustness for,
-             'norm': ['l_2'| 'l_inf'], which norm we care about
-             (optional) 'hypercube': [lo, hi] If present, describes
-                         the dimension of the [lo,hi]^n hypercube that is the
-                         domain of our problem
-
-            Returns TRUE if we can reject this facet, FALSE O.w.
-        """
-        lp_norm = upper_bound_dict['lp_norm']
-        x = upper_bound_dict['x']
-        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
-        eq_a = self.a_eq
-        eq_b = self.b_eq.item()
-        proj = (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a, ord=dual_norm)
-
-        if proj > upper_bound_dict['upper_bound']:
-            return True, 'upper_bound'
-
-        if 'hypercube' in upper_bound_dict:
-            lo, hi = upper_bound_dict['hypercube']
-            central_point = np.ones_like(x.cpu().numpy()) * ((lo + hi) / 2.0)
-            central_point = central_point.squeeze()
-            overshot = -1 if (np.matmul(eq_a, central_point).item() >= eq_b) else 1
-            corner_signs = (np.sign(eq_a) * overshot).T.squeeze()
-            corner = central_point + corner_signs * (lo + hi) / 2.0
-            overshot_2 = -1 if (np.matmul(eq_a, corner).item() >= eq_b) else 1
-
-            if overshot == overshot_2:
-                return True, 'hypercube'
-
-
-        return False, None
-
-
-
-
-    def get_inequality_constraints(self):
-
-        """ Converts equality constraints into inequality constraints
-            and gathers them all together
-        """
-
-        A = np.vstack((self.poly_a, np.multiply(self.a_eq, -1.0)))
-        b = np.hstack((self.poly_b, np.multiply(self.b_eq, -1.0)))
-
-        return A, b
 
