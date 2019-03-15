@@ -778,8 +778,6 @@ class Polytope(object):
         return self.interior_point
 
 
-<<<<<<< HEAD
-=======
     def reject_via_ellipse(self, facets):
         ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
             at the boundary of the ellipse + projecting onto constraint from point if not tight
