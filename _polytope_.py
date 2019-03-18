@@ -94,14 +94,14 @@ class Polytope(object):
         return (True, facet)
 
 
-    def scrub_seen_facets(self, facet_list, seen_dict):
+    def scrub_seen_facets(self, facet_list, seen_dict, net):
         assert all(facet.is_facet and facet.is_feasible for facet in facet_list)
 
         output_facets = []
         num_seen = 0
         for facet in facet_list:
             assert facet.is_facet and facet.is_feasible
-            new_configs = utils.flatten_config(facet.get_new_configs(self.net))
+            new_configs = utils.flatten_config(facet.get_new_configs(net))
             if new_configs in seen_dict:
                 num_seen += 1
             else:
@@ -130,7 +130,9 @@ class Polytope(object):
         return facets
 
 
-    def generate_facets_configs_parallel(self, seen_dict, upper_bound_dict=None):
+    def generate_facets_configs_parallel(self, seen_dict, net,
+                                         upper_bound_dict=None,
+                                         num_jobs=8):
 
         """ Does Facet checking in parallel using joblib to farm out multiple
             jobs to various processes (possibly on differing processors)
@@ -141,12 +143,12 @@ class Polytope(object):
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
-        maplist = [(i, upper_bound_dict) for i in range(self.uba.shape[0])]
+        maplist = [(i, upper_bound_dict) for i in range(self.ub_A.shape[0])]
 
 
         # handle_single_facet checks boundedness, feasibility, dimensionality
         map_fxn = joblib.delayed(utils.star_arg(self.handle_single_facet))
-        outputs = joblib.Parallel(n_jobs=4)(map_fxn(arg) for arg in maplist)
+        outputs = joblib.Parallel(n_jobs=num_jobs)(map_fxn(_) for _ in maplist)
 
 
 
@@ -158,7 +160,8 @@ class Polytope(object):
             else:
                 surviving_facets.append(output)
 
-        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict)
+        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict,
+                                                  net)
         if num_seen > 0:
             reject_dict['seen before'] = num_seen
         return facets, reject_dict
@@ -244,7 +247,8 @@ class Polytope(object):
         ######################################################################
         surviving_facets = [_ for i, _ in enumerate(base_facets) if not
                             removal_list[i]]
-        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict)
+        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict,
+                                                  net)
         if num_seen > 0:
             reject_reasons['seen before'] = num_seen
         return facets, reject_reasons
@@ -980,7 +984,7 @@ class Face(Polytope):
         dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
         eq_a = self.a_eq
         eq_b = self.b_eq.item()
-        proj = (eq_b - np.matmul(x, eq_a.T)) / np.linalg.norm(eq_a, ord=dual_norm)
+        proj = (eq_b - np.dot(x, eq_a.T)) / np.linalg.norm(eq_a, ord=dual_norm)
 
         if proj > upper_bound_dict['upper_bound']:
             return True, 'upper_bound'
