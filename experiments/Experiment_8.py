@@ -101,7 +101,7 @@ layer_shape = lambda layer: layer.weight.detach().numpy().shape
 layer_sizes = [layer_shape(layer)[1] for layer in sequential if type(layer) == nn.Linear] + [layer_shape(sequential[-1])[0]]
 dtype = torch.FloatTensor
 network = PLNN_seq(sequential, layer_sizes, dtype)
-net = network.net
+net = network #.net
 
 
 # print('===============Initializing Network============')
@@ -121,7 +121,11 @@ ts = []
 input_dim = layer_sizes[0]
 
 pts = np.load(cwd + "/data/"+"acas_inputs.npy")
-pts = [pts[0], pts[3]]
+pts = [
+       #pts[0],
+       pts[2],
+       #pts[3]
+       ]
 plot_dir = cwd+'/plots/incremental_geocert/'
 geocert = IncrementalGeoCert(network, display=False, config_fxn='v2', save_dir=plot_dir)
 
@@ -130,13 +134,19 @@ times = []
 
 
 for pt in pts:
+
     print('===============Finding Projection============')
     print('lp_norm: ', lp_norm)
     x_0 = torch.Tensor(pt.reshape([1, input_dim])).type(dtype)
     print('from point: ')
     print(x_0)
 
-    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, compute_upper_bound=False)
+    t, cw_bound, adver_examp, adv_facet = geocert.min_dist(x_0, lp_norm, compute_upper_bound=True)
+
+    import pickle
+    with open('adversarial_facet.pkl', 'wb') as f:
+        pickle.dump(adv_facet, f)
+
     print()
     print('===============Projection Found============')
     print('the final projection value:', t)
@@ -162,6 +172,7 @@ for pt in pts:
     print(x_0)
     print('orig_output')
     print(orig_output)
+
 
     adver_examp = torch.Tensor(adver_examp.reshape([1, input_dim])).type(dtype)
     print('adv_example:')

@@ -196,8 +196,11 @@ def geometric_mean(M, x, t):
 
     using three-dimensional power cones
     '''
+    try:
+        n = int(x.getSize())
+    except:
+        n = x.size()
 
-    n = int(x.getSize())
     if n==1:
       M.constraint(Expr.sub(t, x), Domain.lessThan(0.0))
     else:
@@ -531,6 +534,14 @@ def plot_network_polytopes_sloppy(network, xylim, numpts, legend_flag=False):
 #                            Misc. Utilities                             #
 #                                                                        #
 ##########################################################################
+
+def star_arg(fxn):
+    """ Maps function taking multiple arguments to function taking a single
+        tuple of args
+    """
+    def star_fxn(args, fxn=fxn):
+        return fxn(*args)
+    return star_fxn
 
 
 def _newax(ax=None):

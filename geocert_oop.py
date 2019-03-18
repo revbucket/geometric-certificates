@@ -5,6 +5,8 @@ import sys
 sys.path.append('mister_ed')
 import adversarial_perturbations as ap
 import prebuilt_loss_functions as plf
+
+import prebuilt_loss_functions as plf
 import loss_functions as lf
 import adversarial_attacks as aa
 import utils.pytorch_utils as me_utils
@@ -192,6 +194,34 @@ class IncrementalGeoCert(object):
                                                       'lp_bound': 1.0})
         normalizer = utils.IdentityNormalize
 
+        # Do a carlini wagner L2 and if it's successful we have a great
+        # upper bound!
+        distance_fxn = lf.L2Regularization
+        carlini_loss = lf.CWLossF6
+        cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat,
+                                       distance_fxn, carlini_loss,
+                                       manual_gpu=False)
+        attack_kwargs = {'warm_start': False,
+                         'num_optim_steps': 2000,
+                         'num_bin_search_steps': 5,
+                         'initial_lambda': 10.0,
+                         'verbose': False}
+
+        pert_out = cwl2_attack.attack(x.view(1, -1),
+                                      torch.Tensor([self.true_label]).long(),
+                                      **attack_kwargs)
+        success_out = pert_out.collect_successful(self.net, normalizer,
+                                          success_def='alter_top_logit')
+        if success_out['success_idxs'].numel() > 0:
+
+            self.upper_bound = (success_out['adversarials'].squeeze(0) -
+                                torch.Tensor(x).view(1, -1)).norm().item()
+            self._verbose_print("CWL2 found an upper bound of:",
+                                self.upper_bound)
+            cw_bound = self.upper_bound
+        else:
+            self._verbose_print("CWL2 failed to find an upper bound")
+        return self.upper_bound
 
 
     def _update_step(self, poly, popped_facet):
@@ -245,7 +275,9 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, decision_bound=False,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
-            heapq.heappush(self.pq, heap_el)
+
+            if self.upper_bound is None or facet_distance < self.upper_bound:
+                heapq.heappush(self.pq, heap_el)
 
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
@@ -253,11 +285,14 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, decision_bound=True,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
-            heapq.heappush(self.pq, heap_el)
+            if self.upper_bound is None or facet_distance < self.upper_bound:
+                heapq.heappush(self.pq, heap_el)
 
             # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
             if self.upper_bound is None or facet_distance < self.upper_bound:
                 self.upper_bound = facet_distance
+
+
 
     def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
         """ Returns the minimum distance between x and the decision boundary.
@@ -289,42 +324,11 @@ class IncrementalGeoCert(object):
         cw_bound = None
         upper_bound_dist = None
         if compute_upper_bound:
-            print('Starting CW upper bound')
-            # Do a carlini wagner L2 and if it's successful we have a great
-            # upper bound!
             if lp_norm == 'l_2':
-                delta_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
-                                                                 'lp_bound': 1.0})
-                normalizer = me_utils.IdentityNormalize()
-                distance_fxn = lf.L2Regularization
-                carlini_loss = lf.CWLossF6
-                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss)
-                attack_kwargs = {'warm_start': False,
-                                 'num_optim_steps': 2000,
-                                 'num_bin_search_steps': 5,
-                                 'initial_lambda': 10.0,
-                                 'verbose': False}
-
-                pert_out = cwl2_attack.attack(x.view(1, -1), torch.Tensor([self.true_label]).long(),
-                                              **attack_kwargs)
-                success_out = pert_out.collect_successful(self.net, normalizer,
-                                                  success_def='alter_top_logit')
-
-                self.net.cpu()
-
-                if success_out['success_idxs'].numel() > 0:
-
-                    self.upper_bound = (success_out['adversarials'].squeeze(0) -
-                                        torch.Tensor(x).view(1, -1)).norm().item()
-                    self._verbose_print("CWL2 found an upper bound of:",
-                                        self.upper_bound)
-                    cw_bound = self.upper_bound
-                else:
-                    self._verbose_print("CWL2 failed to find an upper bound")
-
-
-
-
+                self._verbose_print("Starting CW Upper Bound")
+                upper_bound = self._carlini_wagner_l2_upper(x)
+            else:
+                pass
 
 
         ######################################################################
@@ -349,13 +353,13 @@ class IncrementalGeoCert(object):
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
                 adver_examp = pop_el.projection
-
-                return pop_el.lp_dist, cw_bound, adver_examp
+                return pop_el.lp_dist, cw_bound, adver_examp, pop_el
 
             # Otherwise, open up a new polytope and explore
             else:
                 self._verbose_print('---Opening New Polytope---')
-                self._verbose_print('Lower bound is ', pop_el.lp_dist)
+                self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
+                                     self.upper_bound)
                 popped_facet = pop_el.facet
                 configs = popped_facet.get_new_configs(self.net)
                 configs_flat = utils.flatten_config(configs)
@@ -373,6 +377,7 @@ class IncrementalGeoCert(object):
             if index % 1 == 0 and self.display:
                 self.plot_2d(pop_el.lp_dist, iter=index)
             index += 1
+
 
 
 

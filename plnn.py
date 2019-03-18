@@ -111,6 +111,7 @@ class PLNN(nn.Module):
 
         # Append a row constraint for each of the logits except the true one
         facets = []
+        flat_config = utils.flatten_config(configs)
         for i in range(num_logits):
             if i == true_label:
                 continue
@@ -119,7 +120,7 @@ class PLNN(nn.Module):
 
             new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
                              np.hstack((poly_b, constraint_b_to_add)),
-                             [num_constraints], config=None)
+                             [num_constraints], config=flat_config)
             new_facet.check_feasible()
             if new_facet.is_feasible:
                 facets.append(new_facet)
@@ -199,3 +200,6 @@ class PLNN_seq(PLNN):
         super(PLNN_seq, self).__init__(layer_sizes, dtype)
         self.fcs = [layer for layer in sequential if type(layer) == nn.Linear]
         self.net = sequential
+
+    def forward(self, x):
+        return 1 * super(PLNN_seq, self).forward(x)
