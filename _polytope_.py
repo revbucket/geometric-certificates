@@ -542,15 +542,26 @@ class Polytope(object):
 
         bounds = [(None, None) for _ in c]
 
-        linprog_result = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub))
-        if linprog_result['status'] == 'optimal':
-            if linprog_result['primal objective'] < 0:
-                self.interior_point = np.array(linprog_result['x'])[:-1].squeeze()
+
+        try:
+            linprog_result = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub))
+            if linprog_result['status'] == 'optimal':
+                if linprog_result['primal objective'] < 0:
+                    self.interior_point = np.array(linprog_result['x'])[:-1].squeeze()
+                else:
+                    self.interior_point = 'not-full-dimension'
+            else:
+                print("LINPROG STATUS", linprog_result['status'])
+                self.interior_point = 'infeasible'
+        except ValueError: # If cvxopt fails...
+            linprog_result = opt.linprog_result(c, A_ub=A_ub, b_ub=b_ub,
+                                                bounds=bounds,
+                                                method='interior-point')
+            if linprog_result.fun < 0:
+                self.interior_point = linprog_result.x[:-1].squeeze()
             else:
                 self.interior_point = 'not-full-dimension'
-        else:
-            print("LINPROG STATUS", linprog_result['status'])
-            self.interior_point = 'infeasible'
+
         return self.interior_point
 
 

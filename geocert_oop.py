@@ -354,12 +354,7 @@ class IncrementalGeoCert(object):
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
-                self._verbose_print('----------Minimal Projection Generated----------')
-                self._verbose_print("DIST: ", pop_el.lp_dist)
-                if self.display:
-                    self.plot_2d(pop_el.lp_dist, iter=index)
-                adver_examp = pop_el.projection
-                return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
+                break
 
             # Otherwise, open up a new polytope and explore
             else:
@@ -383,6 +378,13 @@ class IncrementalGeoCert(object):
             if index % 1 == 0 and self.display:
                 self.plot_2d(pop_el.lp_dist, iter=index)
             index += 1
+
+        self._verbose_print('----------Minimal Projection Generated----------')
+        self._verbose_print("DIST: ", pop_el.lp_dist)
+        if self.display:
+            self.plot_2d(pop_el.lp_dist, iter=index)
+        adver_examp = pop_el.projection
+        return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
 
 
 
