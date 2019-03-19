@@ -121,6 +121,8 @@ ts = []
 input_dim = layer_sizes[0]
 
 pts = np.load(cwd + "/data/"+"acas_inputs.npy")
+pts[0] = pts[0] + np.random.normal(0, 0.001, [1, 5])
+pts = pts[1:]
 plot_dir = cwd+'/plots/incremental_geocert/'
 geocert = IncrementalGeoCert(network, display=False, config_fxn='v2', save_dir=plot_dir)
 

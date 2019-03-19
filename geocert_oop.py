@@ -295,7 +295,7 @@ class IncrementalGeoCert(object):
                 normalizer = me_utils.IdentityNormalize()
                 distance_fxn = lf.L2Regularization
                 carlini_loss = lf.CWLossF6
-                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss)
+                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss, manual_gpu=False)
                 attack_kwargs = {'warm_start': False,
                                  'num_optim_steps': 2000,
                                  'num_bin_search_steps': 5,
