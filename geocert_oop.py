@@ -158,7 +158,7 @@ class HeapElement(object):
 
 
 class IncrementalGeoCert(object):
-    def __init__(self, net, verbose=True, display=True, save_dir=None,
+    def __init__(self, net, verbose=True, display=False, save_dir=None,
                  ax=None, config_fxn='serial',
                  config_fxn_kwargs=None):
 
@@ -226,9 +226,10 @@ class IncrementalGeoCert(object):
             self._verbose_print("CWL2 found an upper bound of:",
                                 self.upper_bound)
             cw_bound = self.upper_bound
+            return self.upper_bound, pert_out.adversarial_tensors().squeeze(0)
         else:
             self._verbose_print("CWL2 failed to find an upper bound")
-        return self.upper_bound
+            return None, None
 
 
     def _update_step(self, poly, popped_facet):
@@ -326,11 +327,12 @@ class IncrementalGeoCert(object):
         #   Step 0b: If compute upper bound, compute the upper bound radius #
         #####################################################################
         cw_bound = None
+        cw_example = None
         upper_bound_dist = None
         if compute_upper_bound:
             if lp_norm == 'l_2':
                 self._verbose_print("Starting CW Upper Bound")
-                upper_bound = self._carlini_wagner_l2_upper(x)
+                upper_bound, cw_example = self._carlini_wagner_l2_upper(x)
             else:
                 pass
 
@@ -357,7 +359,7 @@ class IncrementalGeoCert(object):
                 if self.display:
                     self.plot_2d(pop_el.lp_dist, iter=index)
                 adver_examp = pop_el.projection
-                return pop_el.lp_dist, cw_bound, adver_examp, pop_el
+                return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
 
             # Otherwise, open up a new polytope and explore
             else:

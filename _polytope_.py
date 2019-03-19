@@ -688,21 +688,15 @@ class Face(Polytope):
         a_eq_new[:, :-1] = self.a_eq
 
         # Setup and solve the linear program using scipy
-
-        linprog_result = opt.linprog(c,
-                                     A_ub=new_poly_a,
-                                     b_ub=new_poly_b, #self.poly_b,
-                                     A_eq=a_eq_new,
-                                     b_eq=self.b_eq,
-                                     bounds=bounds, method='interior-point',
-                                     options={'presolve':True})
-
-        if linprog_result.status == 0:
+        linprog_result = solvers.lp(matrix(c), matrix(new_poly_a),
+                                    matrix(new_poly_b),
+                                    A=matrix(a_eq_new), b=matrix(self.b_eq),
+                                    solver='glpk')
+        if linprog_result['status'] == 'optimal':
             self.is_facet = True
-            self.interior = linprog_result.x[0:-1]
-        elif linprog_result == 3:
-            print('error, unbounded, in linprog for check facet')
-
+            self.interior = np.array(linprog_result['x'][0:-1])
+        else:
+            print("WHAT??? ", linprog_result['status'])
         return self.is_facet
 
 
