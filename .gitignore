@@ -4,7 +4,9 @@
 
 *.ipynb_checkpoints
 
-__pycache__/
-plots/incremental_geocert/
-plots/batch_geocert/
+scratch/*
 
+__pycache__/
+plots/*
+
+.DS_Store

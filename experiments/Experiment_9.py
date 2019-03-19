@@ -1,13 +1,13 @@
-
 # ==================================
-# Experiment 8
+# Experiment 9
 # ==================================
 
-# Compare performance of GeoCert vs. ReluPlex on certifying robustness of ACAS XU network
+# Compare performance of GeoCert vs. ReluPlex on similar network
 
 # =====================
 # Imports
 # =====================
+
 
 import torch
 import os
@@ -21,7 +21,6 @@ import utilities as utils
 import time
 import torch.optim as optim
 from torch.autograd import Variable
-
 
 def constr_heuristic_ellipse(self, n, redundant_list=None):
     ''' Finds non-redundant constraints by finding MVIE and then checking which constriants are tight
@@ -94,7 +93,7 @@ def constr_heuristic_ellipse(self, n, redundant_list=None):
 print('===============Initializing Network============')
 cwd = os.getcwd()
 folderpath = cwd + "/data/"
-filepath = folderpath + "acas_xu_net_true"
+filepath = folderpath + "acas_xu_net_copy_paste"
 sequential = torch.load(filepath)
 
 layer_shape = lambda layer: layer.weight.detach().numpy().shape
@@ -105,24 +104,86 @@ net = network.net
 
 
 # print('===============Initializing Network============')
-# cwd = os.getcwd()
-# layer_sizes = [2, 10, 8, 2]
-# network = PLNN(layer_sizes)
-# net = network.net
-# dtype = torch.FloatTensor
+cwd = os.getcwd()
+network = PLNN(layer_sizes)
+net = network.net
+dtype = torch.FloatTensor
 
+
+# # ==================================
+# # Generate Training Points
+# # ==================================
+#
+# print('===============Generating Training Points============')
+# # random points at least 2r apart
+# input_dim = layer_sizes[0]
+# m = 2000
+# np.random.seed(3)
+# x = [np.random.uniform(size=(input_dim))]
+# r = 0.01
+# while(len(x) < m):
+#     print('got one')
+#     p = np.random.uniform(size=(input_dim))
+#     # if min(np.max(np.sum(np.abs(x), axis=1)) for a in x) > r:
+#     #     x.append(p)
+#     if min(np.linalg.norm(p-a, ord=2) for a in x) > r:
+#         x.append(p)
+#
+# print('done')
+#
+# filepath = folderpath + "x_l2.npy"
+# np.save(filepath, x)
+# quit()
+
+# ==================================
+# Load Training Points
+# ==================================
+
+m = 2000
+filepath = folderpath + "x_l2.npy"
+x = np.load(filepath)
+
+mins = []
+for i, pt in enumerate(x):
+    mins.append(min(np.linalg.norm(pt-a, ord=2) for a in [elem for j, elem in enumerate(x) if j != i]))
+print(np.average(mins))
+
+X = torch.Tensor(np.array(x))
+torch.manual_seed(1)
+y = (torch.rand(m)+0.5).long()
+
+print('===============Generating Test Points============')
+
+x_test = []
+for pt in x:
+    x_test.append(pt+np.ones([1, 5])*0.0001/np.linalg.norm(np.ones([1,5])))
+pts = torch.Tensor(x_test)
+
+# ==================================
+# Train Network
+# ==================================
+
+print('===============Training Network============')
+opt = optim.Adam(net.parameters(), lr=1e-3)
+for i in range(3000):
+    out = net(Variable(X))
+    l = nn.CrossEntropyLoss()(out, Variable(y))
+    err = (out.max(1)[1].data != y).float().mean()
+    if i % 100 == 0:
+        print(l.data[0], err)
+    opt.zero_grad()
+    (l).backward()
+    opt.step()
 
 # ==================================
 # Find Projections
 # ==================================
 
-lp_norm = 'l_inf'
+lp_norm = 'l_2'
 ts = []
 input_dim = layer_sizes[0]
 
-pts = np.load(cwd + "/data/"+"acas_inputs.npy")
-pts[0] = pts[0] + np.random.normal(0, 0.001, [1, 5])
-pts = pts[1:]
+
 plot_dir = cwd+'/plots/incremental_geocert/'
 geocert = IncrementalGeoCert(network, display=False, config_fxn='v2', save_dir=plot_dir)
 
@@ -136,7 +197,7 @@ for pt in pts:
     print('from point: ')
     print(x_0)
 
-    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, False)
+    t, cw_bound, adver_examp = geocert.min_dist(x_0, lp_norm, compute_upper_bound=False)
     print()
     print('===============Projection Found============')
     print('the final projection value:', t)
@@ -179,67 +240,5 @@ end_time = time.time()
 print('==========================================================')
 print('~~~~PROJECTIONS COMPLETE~~~~')
 print('TOTAL TIME (s):', end_time-start_time)
-
-
-
-
-
-# # ==================================
-# # Get Polytope
-# # ==================================
-# input_dim = layer_sizes[0]
-# x_0 = torch.Tensor(np.random.uniform(size=(input_dim)).reshape([input_dim, 1]))
-# poly_dict = network.compute_polytope(x_0)
-# polytope = from_polytope_dict(poly_dict)
-
-
-# # ==================================
-# # Constraint Determination Exact
-# # ==================================
-#
-# time_4 = time.time()
-# facets, reject_reasons = polytope.generate_facets_configs([], network, check_feasible=True)
-# time_5 = time.time()
-# print('clarkson time:', time_5-time_4)
-# print('non_redund_true_clarkson:', [facet.tight_list[0] for facet in facets])
-# print('num non_redund_true_clarkson:', len(facets))
-#
-# time_4 = time.time()
-# facets, reject_reasons = polytope.generate_facets_configs_2([], network, check_feasible=True)
-# time_5 = time.time()
-# print('clarkson 2 time:', time_5-time_4)
-# print('non_redund_true_clarkson2:', [facet.tight_list[0] for facet in facets])
-# print('num non_redund_true_clarkson2:', len(facets))
-#
-# time_4 = time.time()
-# facets, reject_reasons = polytope.generate_facets_configs_parallel([], network, check_feasible=True)
-# time_5 = time.time()
-# print('parallel time:', time_5-time_4)
-# print('non_redund_true_parallel:', [facet.tight_list[0] for facet in facets])
-# print('num non_redund_true_parallel:', len(facets))
-#
-# time_4 = time.time()
-# facets, reject_reasons = polytope.generate_facets_configs([], network, use_clarkson=False, check_feasible=True)
-# time_5 = time.time()
-# print('non-clarkson:', time_5-time_4)
-#
-# print('non_redund_true:', [facet.tight_list[0] for facet in facets])
-# print('num non_redund_true:', len(facets))
-
-# # ==================================
-# # Constraint Determination Heuristic
-# # ==================================
-#
-# list = constr_heuristic_ellipse(polytope, input_dim)
-#
-# num_redund = np.sum([1 for elem in list if elem and elem is not None])
-# num_non_redund = np.sum([1 for elem in list if not elem and elem is not None])
-# num_unknown = np.sum([1 for elem in list if not elem and elem is None])
-# total = len(list)
-#
-# print('num_redund:', num_redund)
-# print('num_non_redund:', num_non_redund)
-# print('num_unknown:', num_unknown)
-# print('total:', total)
-# print('total_prime:', num_non_redund+num_redund+num_unknown)
-# print('percentage: ', (num_non_redund+num_redund)/total*100, '%')
+print('TIMES:')
+print(times)

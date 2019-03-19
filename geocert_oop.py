@@ -5,11 +5,13 @@ import sys
 sys.path.append('mister_ed')
 import adversarial_perturbations as ap
 import prebuilt_loss_functions as plf
+
+import prebuilt_loss_functions as plf
 import loss_functions as lf
 import adversarial_attacks as aa
 import utils.pytorch_utils as me_utils
 
-from _polytope_ import Polytope, Face, from_polytope_dict
+from _polytope_ import Polytope, Face
 import utilities as utils
 import torch
 import numpy as np
@@ -25,7 +27,7 @@ import matplotlib.pyplot as plt
 ##############################################################################
 
 
-class BatchGeocert(object):
+class BatchGeoCert(object):
 
     def __init__(self, polytope_list, comp_method='slow',
                  verbose=True):
@@ -61,8 +63,8 @@ class BatchGeocert(object):
             objects
         """
         # First gather all the feasible facets from the polytope list
-        total_facets = [facet for poly in self.polytope_list for
-                        facet in poly.generate_facets(check_feasible=True)]
+        total_facets = [f for poly in self.polytope_list for
+                        f in poly.generate_facets_naive(check_feasible=True)]
 
         if self.verbose:
             print('num total facets:', len(total_facets))
@@ -156,8 +158,9 @@ class HeapElement(object):
 
 
 class IncrementalGeoCert(object):
-    def __init__(self, net, verbose=True, display=True, save_dir=None,
-                 ax=None, use_clarkson=True, config_fxn='v1'):
+    def __init__(self, net, verbose=True, display=False, save_dir=None,
+                 ax=None, config_fxn='serial',
+                 config_fxn_kwargs=None):
 
         # Direct input state
         self.lp_norm = None # filled in later
@@ -168,11 +171,17 @@ class IncrementalGeoCert(object):
         self.display = display
         self.save_dir = save_dir
         self.ax = ax
-        self.use_clarkson = use_clarkson
-        facet_config_map = {'v1': Polytope.generate_facets_configs,
-                            'v2': Polytope.generate_facets_configs_2,
-                            'parallel': Polytope.generate_facets_configs_parallel_2}
+        facet_config_map = {'serial': Polytope.generate_facets_configs,
+                            'parallel': Polytope.generate_facets_configs_parallel}
         self.facet_config_fxn = facet_config_map[config_fxn]
+        if config_fxn_kwargs is None:
+            if config_fxn == 'parallel':
+                config_fxn_kwargs = None
+            else:
+                config_fxn_kwargs = {'use_clarkson': True,
+                                     'use_ellipse': False}
+        self.config_fxn_kwargs = config_fxn_kwargs or {}
+
         # Things to keep track of
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
@@ -190,8 +199,37 @@ class IncrementalGeoCert(object):
     def _carlini_wagner_l2_upper(self, x):
         l2_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
                                                       'lp_bound': 1.0})
-        normalizer = utils.IdentityNormalize
+        normalizer = me_utils.IdentityNormalize()
 
+        # Do a carlini wagner L2 and if it's successful we have a great
+        # upper bound!
+        distance_fxn = lf.L2Regularization
+        carlini_loss = lf.CWLossF6
+        cwl2_attack = aa.CarliniWagner(self.net, normalizer, l2_threat,
+                                       distance_fxn, carlini_loss,
+                                       manual_gpu=False)
+        attack_kwargs = {'warm_start': False,
+                         'num_optim_steps': 2000,
+                         'num_bin_search_steps': 5,
+                         'initial_lambda': 10.0,
+                         'verbose': False}
+
+        pert_out = cwl2_attack.attack(x.view(1, -1),
+                                      torch.Tensor([self.true_label]).long(),
+                                      **attack_kwargs)
+        success_out = pert_out.collect_successful(self.net, normalizer,
+                                          success_def='alter_top_logit')
+        if success_out['success_idxs'].numel() > 0:
+
+            self.upper_bound = (success_out['adversarials'].squeeze(0) -
+                                torch.Tensor(x).view(1, -1)).norm().item()
+            self._verbose_print("CWL2 found an upper bound of:",
+                                self.upper_bound)
+            cw_bound = self.upper_bound
+            return self.upper_bound, pert_out.adversarial_tensors().squeeze(0)
+        else:
+            self._verbose_print("CWL2 failed to find an upper bound")
+            return None, None
 
 
     def _update_step(self, poly, popped_facet):
@@ -212,16 +250,15 @@ class IncrementalGeoCert(object):
         upper_bound_dict = None
         if self.upper_bound is not None:
             upper_bound_dict = {'upper_bound': self.upper_bound,
-                                'x': self.x,
+                                'x': self.x.cpu().numpy(),
                                 'lp_norm': self.lp_norm,
-                                'hypercube': [0.0, 1.0]}
-
+                                #'hypercube': [-1.0, 1.0]
+                                }
 
         new_facets, rejects = self.facet_config_fxn(poly,
                                               self.seen_to_polytope_map,
-                                              self.net, check_feasible=True,
-                                              upper_bound_dict=upper_bound_dict,
-                                              use_clarkson=self.use_clarkson)
+                                              self.net, upper_bound_dict,
+                                              **self.config_fxn_kwargs)
         self._verbose_print("Num facets: ", len(new_facets))
         self._verbose_print("REJECT DICT: ", rejects)
 
@@ -243,7 +280,9 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, decision_bound=False,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
-            heapq.heappush(self.pq, heap_el)
+
+            if self.upper_bound is None or facet_distance < self.upper_bound:
+                heapq.heappush(self.pq, heap_el)
 
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
@@ -251,11 +290,14 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, decision_bound=True,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
-            heapq.heappush(self.pq, heap_el)
+            if self.upper_bound is None or facet_distance < self.upper_bound:
+                heapq.heappush(self.pq, heap_el)
 
             # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
             if self.upper_bound is None or facet_distance < self.upper_bound:
                 self.upper_bound = facet_distance
+
+
 
     def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
         """ Returns the minimum distance between x and the decision boundary.
@@ -285,10 +327,9 @@ class IncrementalGeoCert(object):
         #   Step 0b: If compute upper bound, compute the upper bound radius #
         #####################################################################
         cw_bound = None
+        cw_example = None
         upper_bound_dist = None
         if compute_upper_bound:
-            # Do a carlini wagner L2 and if it's successful we have a great
-            # upper bound!
             if lp_norm == 'l_2':
                 delta_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
                                                                  'lp_bound': 1.0})
@@ -319,9 +360,10 @@ class IncrementalGeoCert(object):
                 else:
                     self._verbose_print("CWL2 failed to find an upper bound")
 
-
-
-
+                self._verbose_print("Starting CW Upper Bound")
+                upper_bound, cw_example = self._carlini_wagner_l2_upper(x)
+            else:
+                pass
 
 
         ######################################################################
@@ -329,7 +371,7 @@ class IncrementalGeoCert(object):
         ######################################################################
         self._verbose_print('---Initial Polytope---')
         p_0_dict = self.net.compute_polytope(self.x, True)
-        p_0 = from_polytope_dict(p_0_dict)
+        p_0 = Polytope.from_polytope_dict(p_0_dict)
         self._update_step(p_0, None)
 
         ######################################################################
@@ -341,18 +383,13 @@ class IncrementalGeoCert(object):
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
-                self._verbose_print('----------Minimal Projection Generated----------')
-                self._verbose_print("DIST: ", pop_el.lp_dist)
-                if self.display:
-                    self.plot_2d(pop_el.lp_dist, iter=index)
-                adver_examp = pop_el.projection
-
-                return pop_el.lp_dist, cw_bound, adver_examp
+                break
 
             # Otherwise, open up a new polytope and explore
             else:
                 self._verbose_print('---Opening New Polytope---')
-                self._verbose_print('Lower bound is ', pop_el.lp_dist)
+                self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
+                                     self.upper_bound)
                 popped_facet = pop_el.facet
                 configs = popped_facet.get_new_configs(self.net)
                 configs_flat = utils.flatten_config(configs)
@@ -362,7 +399,7 @@ class IncrementalGeoCert(object):
                 if configs_flat not in self.seen_to_polytope_map:
                     new_poly_dict = self.net.compute_polytope_config(configs,
                                                                      True)
-                    new_poly = from_polytope_dict(new_poly_dict)
+                    new_poly = Polytope.from_polytope_dict(new_poly_dict)
                     self._update_step(new_poly, pop_el)
                 else:
                     self._verbose_print("We've already seen that polytope")
@@ -370,6 +407,14 @@ class IncrementalGeoCert(object):
             if index % 1 == 0 and self.display:
                 self.plot_2d(pop_el.lp_dist, iter=index)
             index += 1
+
+        self._verbose_print('----------Minimal Projection Generated----------')
+        self._verbose_print("DIST: ", pop_el.lp_dist)
+        if self.display:
+            self.plot_2d(pop_el.lp_dist, iter=index)
+        adver_examp = pop_el.projection
+        return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
+
 
 
 

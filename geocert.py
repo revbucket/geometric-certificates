@@ -3,7 +3,7 @@
 
 """
 
-from _polytope_ import Polytope, Face, from_polytope_dict
+from _polytope_ import Polytope, Face
 import utilities as utils
 import torch
 import numpy as np
@@ -131,7 +131,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
     ###########################################################################
     print('---Initial Polytope---')
     p_0_dict = net.compute_polytope(x, True)
-    p_0 = from_polytope_dict(p_0_dict)
+    p_0 = Polytope.from_polytope_dict(p_0_dict)
     geocert_update_step(lp_norm, net, x, p_0, None, pq, true_label,
                         seen_to_polytope_map, seen_to_facet_map)
 
@@ -173,7 +173,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200):
             # If polytope has already been seen, don't add it again
             if new_configs_flat not in seen_to_polytope_map:
                 new_polytope_dict = net.compute_polytope_config(new_configs, True)
-                new_polytope = from_polytope_dict(new_polytope_dict)
+                new_polytope = Polytope.from_polytope_dict(new_polytope_dict)
                 geocert_update_step(lp_norm, net, x, new_polytope, popped_facet, pq, true_label,
                                     seen_to_polytope_map, seen_to_facet_map)
 
