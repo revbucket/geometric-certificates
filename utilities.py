@@ -46,6 +46,19 @@ def flatten_config(config):
     return ''.join(str(_) for _ in cat_config.numpy())
 
 
+def index_to_config_coord(config, index):
+    """ Given an index of the flattened array, returns the 2d index of where
+        this corresponds to the configs
+    """
+    config_shapes = [_.numel() for _ in config]
+    assert index < sum(config_shapes)
+
+    for i, config_len in enumerate(config_shapes):
+        if index > config_len - 1:
+            index -= config_len
+        else:
+            return (i, index)
+
 
 ##############################################################################
 #                                                                            #
@@ -64,6 +77,7 @@ def comparison_form(A, b, tolerance=global_tolerance):
     A is a 2d numpy array of shape (m,n)
     b is a 1d numpy array of shape (m)
     """
+    raise DeprecationWarning("DON'T DO THIS OUTSIDE OF BATCH ")
     m, n = A.shape
     # First scale all constraints to have b = +-1, 0
     b_abs = np.abs(b)
@@ -104,6 +118,40 @@ def fuzzy_vector_equal(x_vec, y_vec, tolerance=global_tolerance):
         x_vec, y_vec are 1d numpy arrays
      """
     return all(abs(el) < tolerance for el in x_vec - y_vec)
+
+
+def is_same_hyperplane_nocomp(a1, b1, a2, b2, tolerance=global_tolerance):
+    """ Check same hyperplane when not comparison form """
+
+    # Check that neither a is zero
+    a1_zero = fuzzy_equal(np.linalg.norm(a1), 0, tolerance=tolerance)
+    a2_zero = fuzzy_equal(np.linalg.norm(a1), 0, tolerance=tolerance)
+    b1_zero = fuzzy_equal(b1, 0.0, tolerance=tolerance)
+    b2_zero = fuzzy_equal(b2, 0.0, tolerance=tolerance)
+
+    # If exactly one is zero, then they can't be equal
+    if (a1_zero != a2_zero) or (b1_zero != b2_zero):
+        return False
+
+    # Then find if there's a ratio between the two
+    first_nonzero_idx = None
+    for i, el in enumerate(a1):
+        if not fuzzy_equal(el , 0.0, tolerance):
+            first_nonzero_idx = i
+            break
+    two_one_ratio = a2[first_nonzero_idx] / a1[first_nonzero_idx]
+
+    # If this ratio is zero, return False
+    if fuzzy_equal(two_one_ratio, 0.0, tolerance=tolerance):
+        return False
+
+    # If the vectors aren't parallel, return False
+    if not fuzzy_vector_equal(two_one_ratio * a1, a2, tolerance=tolerance):
+        return False
+
+    # If the biases aren't equal, return false, o.w. return True
+    return fuzzy_equal(two_one_ratio * b1, b2, tolerance=tolerance)
+
 
 
 def is_same_hyperplane(a1, b1, a2, b2, tolerance=global_tolerance):
@@ -176,7 +224,7 @@ def as_numpy(tensor_or_array):
     """
 
     if isinstance(tensor_or_array, torch.Tensor):
-        tensor_or_array = tensor_or_array.cpu().detach().numpy()
+        tensor_or_array = tensor_or_array.cpu().detach().numpy().astype(np.double)
     return tensor_or_array
 
 ##########################################################################
