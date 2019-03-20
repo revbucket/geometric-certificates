@@ -210,8 +210,8 @@ class IncrementalGeoCert(object):
                                        manual_gpu=False)
         attack_kwargs = {'warm_start': False,
                          'num_optim_steps': 2000,
-                         'num_bin_search_steps': 5,
-                         'initial_lambda': 10.0,
+                         'num_bin_search_steps': 10,
+                         'initial_lambda': 100.0,
                          'verbose': False}
 
         pert_out = cwl2_attack.attack(x.view(1, -1),
@@ -341,7 +341,7 @@ class IncrementalGeoCert(object):
         #   Step 1: handle the initial polytope                              #
         ######################################################################
         self._verbose_print('---Initial Polytope---')
-        p_0_dict = self.net.compute_polytope(self.x, True)
+        p_0_dict = self.net.compute_polytope(self.x, False)
         p_0 = Polytope.from_polytope_dict(p_0_dict)
         self._update_step(p_0, None)
 
@@ -350,14 +350,19 @@ class IncrementalGeoCert(object):
         ######################################################################
 
         index = 0
+        print(len(self.pq))
+        prev_min_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
         while True:
+            min_el_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
                 break
-
             # Otherwise, open up a new polytope and explore
             else:
+                if pop_el.lp_dist < prev_min_dist - 1e5:
+                    print("-" * 20 + "WHAT IS GOING WRONG?????" + '-' * 20)
+                prev_min_dist = pop_el.lp_dist
                 self._verbose_print('---Opening New Polytope---')
                 self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
                                      self.upper_bound)
@@ -369,7 +374,7 @@ class IncrementalGeoCert(object):
                 # If polytope has already been seen, don't add it again
                 if configs_flat not in self.seen_to_polytope_map:
                     new_poly_dict = self.net.compute_polytope_config(configs,
-                                                                     True)
+                                                                     False)
                     new_poly = Polytope.from_polytope_dict(new_poly_dict)
                     self._update_step(new_poly, pop_el)
                 else:

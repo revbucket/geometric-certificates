@@ -129,7 +129,7 @@ class PLNN(nn.Module):
 
 
 
-    def compute_polytope_config(self, configs, comparison_form_flag=True):
+    def compute_polytope_config(self, configs, comparison_form_flag=False):
 
         lambdas = [torch.diag(config) for config in configs]
         js = [torch.diag(-2 * config + 1) for config in configs]
@@ -165,7 +165,7 @@ class PLNN(nn.Module):
                 'total_b': bks[-1]
                 }
 
-    def compute_polytope(self, x, comparison_form_flag=True):
+    def compute_polytope(self, x, comparison_form_flag=False):
         pre_relus, configs = self.relu_config(x, return_pre_relus=True)
         poly_out = self.compute_polytope_config(configs, comparison_form_flag)
         poly_out['pre_relus'] = pre_relus

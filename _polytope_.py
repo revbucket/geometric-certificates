@@ -37,13 +37,22 @@ class Polytope(object):
             with no strict equality constraints"""
 
         if isinstance(ub_A, torch.Tensor):
-            ub_A = ub_A.cpu().detach().numpy()
+            ub_A = ub_A.cpu().detach().numpy().astype(np.double)
         if isinstance(ub_b, torch.Tensor):
-            ub_b = ub_b.cpu().detach().numpy()
-        self.ub_A = utils.as_numpy(ub_A)
-        self.ub_b = utils.as_numpy(ub_b).squeeze()
+            ub_b = ub_b.cpu().detach().numpy().astype(np.double)
+        self.ub_A = utils.as_numpy(ub_A).astype(np.double)
+        self.ub_b = utils.as_numpy(ub_b).squeeze().astype(np.double)
         self.config = config
         self.interior_point = interior_point
+
+        # Domain constraints
+        # A_upper = np.eye(self.ub_A.shape[1])
+        # b_upper = np.ones(self.ub_A.shape[1])
+        # A_lower = -1 * np.eye(self.ub_A.shape[1])
+        # b_lower = np.zeros(self.ub_A.shape[1])
+        # self.domain_a = np.vstack((A_upper, A_lower))
+        # self.domain_b = np.hstack((b_upper, b_lower))
+        #
 
 
     @classmethod
@@ -95,6 +104,7 @@ class Polytope(object):
 
 
     def scrub_seen_facets(self, facet_list, seen_dict, net):
+
         assert all(facet.is_facet and facet.is_feasible for facet in facet_list)
 
         output_facets = []
@@ -149,8 +159,6 @@ class Polytope(object):
         # handle_single_facet checks boundedness, feasibility, dimensionality
         map_fxn = joblib.delayed(utils.star_arg(self.handle_single_facet))
         outputs = joblib.Parallel(n_jobs=num_jobs)(map_fxn(_) for _ in maplist)
-
-
 
         reject_dict = {}
         surviving_facets = []
@@ -224,22 +232,43 @@ class Polytope(object):
 
         if use_clarkson:
             redundant_list = self.clarkson_with_removal(removal_list)
+
             clarkson_count = sum(redundant_list & (~removal_list))
             print("Clarkson found %s redundant constraints" % clarkson_count)
             reject_reasons['redundant'] = clarkson_count
             removal_list |= redundant_list # in-place 'OR'
-        else:
+
+            # Everything output as not-redundant by Clarkson is feasible
+            # But still need to check dimensionality of what's left
             for i, facet in enumerate(base_facets):
                 if removal_list[i]:
                     continue
-                status, out = self.handle_single_facet(None, upper_bound_dict,
-                                                       facet=facet)
-                if status: # if feasible, within bounds, nad facet
-                    status_2, out = self.finish_single_facet(out, seen_dict)
-                    status = status_2 & status
-                if not status:
-                    reject_reasons[out] = reject_reasons.get(out, 0) + 1
+                facet.is_feasible = True
+                facet.check_facet()
+                if not facet.is_facet:
                     removal_list[i] = True
+                    reject_reasons['not-facet'] =\
+                                          reject_reasons.get('not-facet', 0) + 1
+
+        else:
+            print("NOT USING CLARKSON")
+            for i, facet in enumerate(base_facets):
+                if removal_list[i]:
+                    continue
+                # Check feasibility
+                facet.check_feasible()
+                if not facet.is_feasible:
+                    reject_reasons['infeasible'] =\
+                                         reject_reasons.get('infeasible', 0) + 1
+                    removal_list[i] = True
+                    continue
+                # Check dimensionality
+                facet.check_facet()
+                if not facet.is_facet:
+                    reject_reasons['not-facet'] =\
+                                         reject_reasons.get('not_factet', 0) + 1
+                    removal_list[i] = True
+                    continue
 
 
         ######################################################################
@@ -290,6 +319,7 @@ class Polytope(object):
     def to_comparison_form(self, copy=False):
         """ Converts this A,b into comparison form. If copy is true, returns a
             new object of this type """
+        print("SHOULDNT BE DOING THIS ANYMORE")
         comp_A, comp_b = utils.comparison_form(self.ub_A, self.ub_b)
         self.ub_A = comp_A
         self.ub_b = comp_b
@@ -373,12 +403,19 @@ class Polytope(object):
         linprog_b = np.hstack((selected_ub_b, val_to_check))
 
         bounds = [(None, None) for _ in c]
-        linprog_result = opt.linprog(-c,  # max A[i]x
-                                     A_ub=linprog_a,
-                                     b_ub=linprog_b,
-                                     bounds=bounds,
-                                     method='interior-point')
-        return (-linprog_result.fun <= self.ub_b[i], linprog_result.x)
+        try:
+            linprog_result = solvers.lp(matrix(-c), matrix(linprog_a),
+                                        matrix(linprog_b), solver='glpk')
+            return (linprog_result['primal objective'] < self.ub_b[i],
+                    np.array(linprog_result['x']).squeeze())
+
+        except:
+            linprog_result = opt.linprog(-c,  # max A[i]x
+                                         A_ub=linprog_a,
+                                         b_ub=linprog_b,
+                                         bounds=bounds,
+                                         method='interior-point')
+            return (-linprog_result.fun <= self.ub_b[i], linprog_result.x)
 
 
 
@@ -544,7 +581,8 @@ class Polytope(object):
 
 
         try:
-            linprog_result = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub))
+            linprog_result = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub),
+                                        solver='glpk')
             if linprog_result['status'] == 'optimal':
                 if linprog_result['primal objective'] < 0:
                     self.interior_point = np.array(linprog_result['x'])[:-1].squeeze()
@@ -614,11 +652,9 @@ class Polytope(object):
 
 
 
-
-
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None,
-                 removal_list=None):
+                 removal_list=None, use_domain_constraints=False):
         super(Face, self).__init__(poly_a, poly_b, config=config)
         self.poly_a = poly_a
         self.poly_b = poly_b
@@ -629,6 +665,19 @@ class Face(Polytope):
         self.is_facet = None
         self.interior = None
         self.removal_list = removal_list
+
+        # Domain constraints
+        self.use_domain_constraints = use_domain_constraints
+        if use_domain_constraints:
+            A_upper = np.eye(self.poly_a.shape[1])
+            b_upper = np.ones(self.poly_a.shape[1])
+            A_lower = -1 * np.eye(self.poly_a.shape[1])
+            b_lower = np.zeros(self.poly_a.shape[1])
+
+            self.domain_a = np.vstack((A_upper, A_lower))
+            self.domain_b = np.hstack((b_upper, b_lower))
+        # End domain
+
 
     def check_feasible(self):
         """ Checks if this polytope is feasible and stores the result
@@ -642,8 +691,17 @@ class Face(Polytope):
             return self.is_feasible
         # Set up feasibility check Linear program
         c = np.zeros(self.poly_a.shape[1])
-        cvxopt_out = solvers.lp(matrix(c), matrix(self.poly_a),
-                                matrix(self.poly_b),
+
+        A_ub = self.poly_a
+        b_ub = self.poly_b
+
+        # Add domain constraints
+        if self.use_domain_constraints:
+            A_ub = np.vstack((A_ub, self.domain_a))
+            b_ub = np.hstack((b_ub, self.domain_b))
+        # Domain constraints
+
+        cvxopt_out = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub),
                                 A=matrix(self.a_eq), b=matrix(self.b_eq),
                                 solver='glpk')
 
@@ -670,6 +728,7 @@ class Face(Polytope):
         #          t  > 0
         # and if is_feasible, then good
         c = np.zeros(n + 1)
+        # c[-1] = -1
 
         # SPEED UP WITH REMOVAL LIST!
         if self.removal_list is not None:
@@ -692,11 +751,26 @@ class Face(Polytope):
         #------
 
 
-        # Map indices real quick:
+
         bounds = [(None, None) for _ in range(n)] + [(1e-11, None)]
+        lower_bound_a = np.zeros(n + 1)
+        lower_bound_a[-1] = -1
+        lower_bound_b = 1e-7
+        new_poly_a = np.vstack((new_poly_a, lower_bound_a))
+        new_poly_b = np.hstack((new_poly_b, lower_bound_b))
+        # Map indices real quick:
         m2, n2 = self.a_eq.shape
         a_eq_new = np.zeros([m2, n+1])
         a_eq_new[:, :-1] = self.a_eq
+
+        # Add domain constraints
+        if self.use_domain_constraints:
+            domain_a = np.hstack((self.domain_a,
+                                  np.zeros((self.domain_a.shape[0], 1))))
+            new_poly_a = np.vstack((new_poly_a, domain_a))
+            new_poly_b = np.hstack((new_poly_b, self.domain_b))
+        #
+
 
         # Setup and solve the linear program using scipy
         linprog_result = solvers.lp(matrix(c), matrix(new_poly_a),
@@ -727,7 +801,7 @@ class Face(Polytope):
         other_a = other.poly_a[other_tight, :]
         other_b = other.poly_b[other_tight]
 
-        return utils.is_same_hyperplane(self_a, self_b, other_a, other_b)
+        return utils.is_same_hyperplane_nocomp(self_a, self_b, other_a, other_b)
 
 
     def _same_tight_constraint(self, other):
@@ -845,22 +919,40 @@ class Face(Polytope):
 
         ReLu_distance_check = (utils.config_hamming_distance(self.config, other.config) == 1)
 
+
         return ReLu_distance_check and not self._same_tight_constraint(other)
 
     def get_new_configs(self, net):
         ''' Function takes original ReLu configs and flips the activation of
             the ReLu at index specified in 'tight_boolean_configs'.
         '''
+
+
+
+        # New and improved version:
+        # Looks at the tight list, maps the tight index to the 2d
+        # coordinate in the config and flips the index_map
+        assert self.interior is not None
+
+        orig_configs = self.config
+        tight_idx = self.tight_list[0]
+        flip_i, flip_j = utils.index_to_config_coord(orig_configs, tight_idx)
+        new_configs = copy.deepcopy(orig_configs)
+        new_configs[flip_i][flip_j] = int(1 - new_configs[flip_i][flip_j])
+
+        return new_configs
+
+
+
         #TODO: this could be improved if tight index was consistent with
         # order of ReLu configs, but it isn't for some reason?
         # Solution: find tight ReLu activation by running interior pt through net
         orig_configs = self.config
         pre_relus, post_relus = net.relu_config(torch.Tensor(self.interior))
-        tight_boolean_configs = [utils.fuzzy_equal(elem, 0.0, tolerance=1e-6)
+        tight_boolean_configs = [utils.fuzzy_equal(elem, 0.0, tolerance=1e-9)
                          for activations in pre_relus for elem in activations]
 
         new_configs = copy.deepcopy(orig_configs)
-
         for i, tight_bools in enumerate(tight_boolean_configs):
             for j, tight_bool in enumerate(tight_bools):
                 if tight_bool == 1:
