@@ -126,6 +126,7 @@ pts = [
        pts[2],
        #pts[3]
        ]
+
 plot_dir = cwd+'/plots/incremental_geocert/'
 geocert = IncrementalGeoCert(network, display=False, config_fxn='v2', save_dir=plot_dir)
 

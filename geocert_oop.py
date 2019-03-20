@@ -331,6 +331,35 @@ class IncrementalGeoCert(object):
         upper_bound_dist = None
         if compute_upper_bound:
             if lp_norm == 'l_2':
+                delta_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
+                                                                 'lp_bound': 1.0})
+                normalizer = me_utils.IdentityNormalize()
+                distance_fxn = lf.L2Regularization
+                carlini_loss = lf.CWLossF6
+                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss, manual_gpu=False)
+                attack_kwargs = {'warm_start': False,
+                                 'num_optim_steps': 2000,
+                                 'num_bin_search_steps': 5,
+                                 'initial_lambda': 10.0,
+                                 'verbose': False}
+
+                pert_out = cwl2_attack.attack(x.view(1, -1), torch.Tensor([self.true_label]).long(),
+                                              **attack_kwargs)
+                success_out = pert_out.collect_successful(self.net, normalizer,
+                                                  success_def='alter_top_logit')
+
+                self.net.cpu()
+
+                if success_out['success_idxs'].numel() > 0:
+
+                    self.upper_bound = (success_out['adversarials'].squeeze(0) -
+                                        torch.Tensor(x).view(1, -1)).norm().item()
+                    self._verbose_print("CWL2 found an upper bound of:",
+                                        self.upper_bound)
+                    cw_bound = self.upper_bound
+                else:
+                    self._verbose_print("CWL2 failed to find an upper bound")
+
                 self._verbose_print("Starting CW Upper Bound")
                 upper_bound, cw_example = self._carlini_wagner_l2_upper(x)
             else:
