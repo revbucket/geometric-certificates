@@ -99,8 +99,8 @@ class Polytope(object):
             assert isinstance(domain_bounds, list)
             if len(domain_bounds) == 1:
                 domain_low, domain_high = domain_bounds[0]
-                b_lower = -1 * domain_low * np.zeros(n)
-                b_upper = domain_high * np.zeros(n)
+                b_lower = -1 * domain_low * np.ones(n)
+                b_upper = domain_high * np.ones(n)
             else:
                 b_lower = -1 * np.array([_[0] for _ in domain_bounds])
                 b_upper = np.array([_[1] for _ in domain_bounds])
