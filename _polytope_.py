@@ -162,7 +162,7 @@ class Polytope(object):
         output_facets = []
         num_seen = 0
         # remove all domain bounded facets first
-        facet_list = [_ for _ in facet_list if _.facet_type != 'domain']:
+        facet_list = [_ for _ in facet_list if _.facet_type != 'domain']
         for facet in facet_list
             new_configs = utils.flatten_config(facet.get_new_configs(net))
             if new_configs in seen_dict:
