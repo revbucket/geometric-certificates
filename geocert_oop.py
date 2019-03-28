@@ -391,7 +391,8 @@ class IncrementalGeoCert(object):
         ######################################################################
         self._verbose_print('---Initial Polytope---')
         p_0_dict = self.net.compute_polytope(self.x, False)
-        p_0 = Polytope.from_polytope_dict(p_0_dict)
+        p_0 = Polytope.from_polytope_dict(p_0_dict, 
+                                          domain_bounds=self.domain_bounds)
         self._update_step(p_0, None)
 
         ######################################################################
@@ -424,7 +425,8 @@ class IncrementalGeoCert(object):
                 if configs_flat not in self.seen_to_polytope_map:
                     new_poly_dict = self.net.compute_polytope_config(configs,
                                                                      False)
-                    new_poly = Polytope.from_polytope_dict(new_poly_dict)
+                    new_poly = Polytope.from_polytope_dict(new_poly_dict, 
+                                              domain_bounds=self.domain_bounds)
                     self._update_step(new_poly, pop_el)
                 else:
                     self._verbose_print("We've already seen that polytope")
