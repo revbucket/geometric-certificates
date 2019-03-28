@@ -145,22 +145,31 @@ class HeapElement(object):
         in the incremental algorithm
     """
     def __init__(self, lp_dist, facet,
-                 decision_bound=False,
+                 facet_type='facet',                                  
                  exact_or_estimate='exact'):
         self.lp_dist = lp_dist
         self.facet = facet
-        self.decision_bound = decision_bound
+
+        assert facet_type in ['facet', 'decision', 'domain']
+        self.facet_type = facet_type
         self.exact_or_estimate = exact_or_estimate
         self.projection = None
 
     def __lt__(self, other):
         return self.lp_dist < other.lp_dist
 
+    def decision_bound(self):
+        return self.facet_type == 'decision'
+
+    def domain_bound(self):
+        return self.facet_type == 'domain'
+
 
 class IncrementalGeoCert(object):
     def __init__(self, net, verbose=True, display=False, save_dir=None,
                  ax=None, config_fxn='serial',
-                 config_fxn_kwargs=None):
+                 config_fxn_kwargs=None, 
+                 domain_bounds=None):
 
         # Direct input state
         self.lp_norm = None # filled in later
@@ -188,6 +197,14 @@ class IncrementalGeoCert(object):
         self.pq = [] # Priority queue that contains HeapElements
         self.upper_bound = None
 
+        # Handle domain bounds 
+        # Is either None, a single pair (lo, hi), or a list of pairs of length     
+        # input-dimension(net). Provides box constraints for the domain of the     
+        # search. These constraints get thrown in to the polytope and facet                
+        assert domain_bounds is None or\
+               (isinstance(domain_bounds, list) and 
+                all(isinstance(_, tuple) for _ in domain_bounds))
+        self.domain_bounds = domain_bounds
 
 
 
@@ -265,19 +282,22 @@ class IncrementalGeoCert(object):
 
         poly_config = utils.flatten_config(poly.config)
         adv_constraints = self.net.make_adversarial_constraints(poly.config,
-                                                                self.true_label)
+                              self.true_label, domain_bounds=self.domain_bounds)
         self.seen_to_polytope_map[poly_config] = poly
         self.seen_to_facet_map[poly_config] = new_facets
 
         # Step 2) For each new facet, add to queue
         handled_popped_facet = (popped_facet == None)
         for facet in new_facets:
+            if facet.facet_type == 'domain':
+                continue 
             if (not handled_popped_facet) and\
                 popped_facet.facet.check_same_facet_config(facet):
                 handled_popped_facet = True
                 continue
             facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet, decision_bound=False,
+            heap_el = HeapElement(facet_distance, facet, 
+                                  facet_type=facet.facet_type,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
 
@@ -287,7 +307,7 @@ class IncrementalGeoCert(object):
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
             facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet, decision_bound=True,
+            heap_el = HeapElement(facet_distance, facet, facet_type='decision',
                                   exact_or_estimate='exact')
             heap_el.projection = projection
             if self.upper_bound is None or facet_distance < self.upper_bound:
@@ -331,35 +351,6 @@ class IncrementalGeoCert(object):
         upper_bound_dist = None
         if compute_upper_bound:
             if lp_norm == 'l_2':
-                delta_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
-                                                                 'lp_bound': 1.0})
-                normalizer = me_utils.IdentityNormalize()
-                distance_fxn = lf.L2Regularization
-                carlini_loss = lf.CWLossF6
-                cwl2_attack = aa.CarliniWagner(self.net, normalizer, delta_threat, distance_fxn, carlini_loss, manual_gpu=False)
-                attack_kwargs = {'warm_start': False,
-                                 'num_optim_steps': 2000,
-                                 'num_bin_search_steps': 5,
-                                 'initial_lambda': 10.0,
-                                 'verbose': False}
-
-                pert_out = cwl2_attack.attack(x.view(1, -1), torch.Tensor([self.true_label]).long(),
-                                              **attack_kwargs)
-                success_out = pert_out.collect_successful(self.net, normalizer,
-                                                  success_def='alter_top_logit')
-
-                self.net.cpu()
-
-                if success_out['success_idxs'].numel() > 0:
-
-                    self.upper_bound = (success_out['adversarials'].squeeze(0) -
-                                        torch.Tensor(x).view(1, -1)).norm().item()
-                    self._verbose_print("CWL2 found an upper bound of:",
-                                        self.upper_bound)
-                    cw_bound = self.upper_bound
-                else:
-                    self._verbose_print("CWL2 failed to find an upper bound")
-
                 self._verbose_print("Starting CW Upper Bound")
                 upper_bound, cw_example = self._carlini_wagner_l2_upper(x)
             else:
@@ -371,7 +362,8 @@ class IncrementalGeoCert(object):
         ######################################################################
         self._verbose_print('---Initial Polytope---')
         p_0_dict = self.net.compute_polytope(self.x, False)
-        p_0 = Polytope.from_polytope_dict(p_0_dict)
+        p_0 = Polytope.from_polytope_dict(p_0_dict, 
+                                          domain_bounds=self.domain_bounds)
         self._update_step(p_0, None)
 
         ######################################################################
@@ -385,7 +377,7 @@ class IncrementalGeoCert(object):
             min_el_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
-            if pop_el.decision_bound:
+            if pop_el.decision_bound():
                 break
             # Otherwise, open up a new polytope and explore
             else:
@@ -404,7 +396,8 @@ class IncrementalGeoCert(object):
                 if configs_flat not in self.seen_to_polytope_map:
                     new_poly_dict = self.net.compute_polytope_config(configs,
                                                                      False)
-                    new_poly = Polytope.from_polytope_dict(new_poly_dict)
+                    new_poly = Polytope.from_polytope_dict(new_poly_dict, 
+                                              domain_bounds=self.domain_bounds)
                     self._update_step(new_poly, pop_el)
                 else:
                     self._verbose_print("We've already seen that polytope")
@@ -433,9 +426,9 @@ class IncrementalGeoCert(object):
         polytope_list = [self.seen_to_polytope_map[elem]
                          for elem in self.seen_to_polytope_map]
         facet_list = [heap_elem.facet for heap_elem in self.pq
-                      if not heap_elem.decision_bound]
+                      if not heap_elem.decision_bound()]
         boundary_facet_list = [heap_elem.facet for heap_elem in self.pq
-                               if heap_elem.decision_bound]
+                               if heap_elem.decision_bound()]
         colors = utils.get_spaced_colors(n_colors)[0:len(polytope_list)]
 
         xylim = 50.0
