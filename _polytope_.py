@@ -714,10 +714,8 @@ class Face(Polytope):
         super(Face, self).__init__(poly_a, poly_b, config=config,
                                    domain_bounds=domain_bounds,
                                    _domain_structure=_domain_structure)
-        self.poly_a = poly_a
-        self.poly_b = poly_b
-        self.a_eq = self.poly_a[tight_list]
-        self.b_eq = self.poly_b[tight_list]
+        self.a_eq = self.ub_A[tight_list]
+        self.b_eq = self.ub_b[tight_list]
         self.tight_list = tight_list
         self.is_feasible = None
         self.is_facet = None
@@ -744,10 +742,10 @@ class Face(Polytope):
         if self.is_feasible is not None:
             return self.is_feasible
         # Set up feasibility check Linear program
-        c = np.zeros(self.poly_a.shape[1])
+        c = np.zeros(self.ub_A.shape[1])
 
-        A_ub = self.poly_a
-        b_ub = self.poly_b
+        A_ub = self.ub_A
+        b_ub = self.ub_b
 
         cvxopt_out = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub),
                                 A=matrix(self.a_eq), b=matrix(self.b_eq),
@@ -769,7 +767,7 @@ class Face(Polytope):
             self.is_facet = False
             return self.is_facet
 
-        m, n = self.poly_a.shape
+        m, n = self.ub_A.shape
         # Dimension check of (n-1) facet
         # Do min 0
         # st. Ax + t <= b
@@ -781,21 +779,21 @@ class Face(Polytope):
         # SPEED UP WITH REMOVAL LIST!
         if self.removal_list is not None:
             map_idx = sum(~self.removal_list[:self.tight_list[0]])
-            saved_row = self.poly_a[self.tight_list[0]]
+            saved_row = self.ub_A[self.tight_list[0]]
 
-            new_poly_a = self.poly_a[~self.removal_list]
+            new_poly_a = self.ub_A[~self.removal_list]
             new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
             new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))
             new_poly_a[-1][-1] = -1
             new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
 
-            new_poly_b = self.poly_b[~self.removal_list]
+            new_poly_b = self.ub_b[~self.removal_list]
             new_poly_b = np.hstack((new_poly_b, 0))
         else:
             new_poly_a = np.ones([m, n+1])
-            new_poly_a[:, :-1] = self.poly_a
+            new_poly_a[:, :-1] = self.ub_A
             new_poly_a[self.tight_list, -1] = 0
-            new_poly_b = self.poly_b
+            new_poly_b = self.ub_b
         #------
 
 
@@ -834,12 +832,12 @@ class Face(Polytope):
             return False
         # if they lie in different hyperplanes, then return False
         self_tight = self.tight_list[0]
-        self_a = self.poly_a[self_tight, :]
-        self_b = self.poly_b[self_tight]
+        self_a = self.ub_A[self_tight, :]
+        self_b = self.ub_b[self_tight]
 
         other_tight = other.tight_list[0]
-        other_a = other.poly_a[other_tight, :]
-        other_b = other.poly_b[other_tight]
+        other_a = other.ub_A[other_tight, :]
+        other_b = other.ub_b[other_tight]
 
         return utils.is_same_hyperplane_nocomp(self_a, self_b, other_a, other_b)
 
@@ -853,12 +851,12 @@ class Face(Polytope):
             return False
         # if they lie in different hyperplanes, then return False
         self_tight = self.tight_list[0]
-        self_a = self.poly_a[self_tight, :]
-        self_b = self.poly_b[self_tight]
+        self_a = self.ub_A[self_tight, :]
+        self_b = self.ub_b[self_tight]
 
         other_tight = other.tight_list[0]
-        other_a = other.poly_a[other_tight, :]
-        other_b = other.poly_b[other_tight]
+        other_a = other.ub_A[other_tight, :]
+        other_b = other.ub_b[other_tight]
 
         return utils.is_same_tight_constraint(self_a, self_b, other_a, other_b)
 
@@ -877,10 +875,10 @@ class Face(Polytope):
 
         # now just return True if their intersection is dimension (n-1)
 
-        new_tight_list = np.add(other.tight_list, self.poly_b.shape)
+        new_tight_list = np.add(other.tight_list, self.ub_b.shape)
 
-        new_face = Face(np.vstack((self.poly_a, other.poly_a)),
-                        np.hstack((self.poly_b, other.poly_b)),
+        new_face = Face(np.vstack((self.ub_A, other.ub_A)),
+                        np.hstack((self.ub_b, other.ub_b)),
                         tight_list=np.hstack((self.tight_list, new_tight_list)))
         return new_face.check_facet()
 
@@ -1019,21 +1017,21 @@ class Face(Polytope):
         # 3)  v <= t * 1           (<==>)    v_i - t <= 0
         # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
 
-        n = np.shape(self.poly_a)[1]
+        n = np.shape(self.ub_A)[1]
         x = utils.as_numpy(x).reshape(n, -1)
 
         # optimization variable is [t, v]
-        m = self.poly_a.shape[0]
+        m = self.ub_A.shape[0]
         c = np.zeros(n+1)
         c[0] = 1
 
         # Constraint 1
-        constraint_1a = np.hstack((np.zeros((m, 1)), self.poly_a))
-        constraint_1b = self.poly_b - np.matmul(self.poly_a, x)[:, 0]
+        constraint_1a = np.hstack((np.zeros((m, 1)), self.ub_A))
+        constraint_1b = self.ub_b - np.matmul(self.ub_A, x)[:, 0]
 
         # Constraint 2
         constraint_2a = constraint_1a[self.tight_list, :]
-        constraint_2b = self.poly_b[self.tight_list] - np.matmul(self.poly_a[self.tight_list, :], x)
+        constraint_2b = self.ub_b[self.tight_list] - np.matmul(self.ub_A[self.tight_list, :], x)
 
 
         # Constraint 3
@@ -1072,12 +1070,12 @@ class Face(Polytope):
         # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
         # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
 
-        n = np.shape(self.poly_a)[1]
+        n = np.shape(self.ub_A)[1]
         x = utils.as_numpy(x).reshape(n, -1)
 
         P = matrix(np.identity(n))
-        G = matrix(self.poly_a)
-        h = matrix(self.poly_b - np.matmul(self.poly_a, x)[:, 0])
+        G = matrix(self.ub_A)
+        h = matrix(self.ub_b - np.matmul(self.ub_A, x)[:, 0])
         q = matrix(np.zeros([n, 1]))
         A = matrix(self.a_eq)
         b = matrix(self.b_eq - np.matmul(self.a_eq, x))
@@ -1148,8 +1146,8 @@ class Face(Polytope):
             and gathers them all together
         """
 
-        A = np.vstack((self.poly_a, np.multiply(self.a_eq, -1.0)))
-        b = np.hstack((self.poly_b, np.multiply(self.b_eq, -1.0)))
+        A = np.vstack((self.ub_A, np.multiply(self.a_eq, -1.0)))
+        b = np.hstack((self.ub_b, np.multiply(self.b_eq, -1.0)))
 
         return A, b
 
