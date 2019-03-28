@@ -809,14 +809,6 @@ class Face(Polytope):
         a_eq_new = np.zeros([m2, n+1])
         a_eq_new[:, :-1] = self.a_eq
 
-        # Add domain constraints
-        if self.domain_a is not None:
-            domain_a = np.hstack((self.domain_a,
-                                  np.zeros((self.domain_a.shape[0], 1))))
-            new_poly_a = np.vstack((new_poly_a, domain_a))
-            new_poly_b = np.hstack((new_poly_b, self.domain_b))
-
-
 
         # Setup and solve the linear program using scipy
         linprog_result = solvers.lp(matrix(c), matrix(new_poly_a),
