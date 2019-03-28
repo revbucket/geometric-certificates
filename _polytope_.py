@@ -51,7 +51,7 @@ class Polytope(object):
         # -- xor --
         # domain constraints cooked into ub_A already or not
         assert (domain_bounds == None) or (_domain_structure == None)
-        num_constraints = self.ub_A.shape[1]
+        num_constraints = self.ub_A.shape[0]
 
         # If need to cook in domain constraints into ub_A, then do so
         if domain_bounds is not None:
@@ -207,7 +207,8 @@ class Polytope(object):
         ##################################################################
         #   Set up pool and offload all the work, and then merge results #
         ##################################################################
-        maplist = [(i, upper_bound_dict) for i in range(self.ub_A.shape[0])]
+        num_facets = self._domain_structure['num_constraints']
+        maplist = [(i, upper_bound_dict) for i in range(num_facets)]
 
 
         # handle_single_facet checks boundedness, feasibility, dimensionality
@@ -244,7 +245,7 @@ class Polytope(object):
         ######################################################################
         #   Step 0: Setup things we'll need                                  #
         ######################################################################
-        num_constraints = self.ub_A.shape[0]
+        num_constraints = self._domain_structure['num_constraints']
 
         # True for unnecessary constraints, false ow. Shared amongst facets
         removal_list = np.full(num_constraints, False)
