@@ -81,7 +81,8 @@ class PLNN(nn.Module):
         else:
             return configs
 
-    def make_adversarial_constraints(self, configs, true_label):
+    def make_adversarial_constraints(self, configs, true_label,
+                                     domain_bounds=None):
         """ Given a config computes the linear map in terms of this config
             for all neurons INCLUDING the output neurons (logits) and generates
             the polytope constraints for the neuron config and
@@ -89,6 +90,7 @@ class PLNN(nn.Module):
 
             configs - as usual
             true_label -
+
         """
         # Find all adversarial constraints
         polytope_config = self.compute_polytope_config(configs)
@@ -120,7 +122,8 @@ class PLNN(nn.Module):
 
             new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
                              np.hstack((poly_b, constraint_b_to_add)),
-                             [num_constraints], config=flat_config)
+                             [num_constraints], config=flat_config,
+                             domain_bounds=domain_bounds)
             new_facet.check_feasible()
             if new_facet.is_feasible:
                 facets.append(new_facet)

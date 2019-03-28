@@ -32,7 +32,8 @@ import time
 
 
 class Polytope(object):
-    def __init__(self, ub_A, ub_b, config=None, interior_point=None):
+    def __init__(self, ub_A, ub_b, config=None, interior_point=None,
+                 domain_bounds=None, _domain_structure=None):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
 
@@ -45,22 +46,72 @@ class Polytope(object):
         self.config = config
         self.interior_point = interior_point
 
-        # Domain constraints
-        # A_upper = np.eye(self.ub_A.shape[1])
-        # b_upper = np.ones(self.ub_A.shape[1])
-        # A_lower = -1 * np.eye(self.ub_A.shape[1])
-        # b_lower = np.zeros(self.ub_A.shape[1])
-        # self.domain_a = np.vstack((A_upper, A_lower))
-        # self.domain_b = np.hstack((b_upper, b_lower))
-        #
+        # Domain constraints:
+        # Either have no domain constraints
+        # -- xor --
+        # domain constraints cooked into ub_A already or not
+        assert (domain_bounds == None) or (_domain_structure == None)
+        num_constraints = self.ub_A.shape[1]
+
+        # If need to cook in domain constraints into ub_A, then do so
+        if domain_bounds is not None:
+            domain_a, domain_b = self.convert_domain_bounds(domain_bounds,
+                                                            self.ub_A.shape[1])
+            self.ub_A = np.vstack((self.ub_A, domain_a))
+            self.ub_b = np.hstack((self.ub_b, domain_b))
+
+        # If domain constraints not provided, build them and set them
+        if _domain_structure is None:
+            _domain_structure = {'num_constraints': num_constraints,
+                                 'domain_bounds': domain_bounds}
+        self._domain_structure = _domain_structure
+
 
 
     @classmethod
-    def from_polytope_dict(cls, polytope_dict):
+    def from_polytope_dict(cls, polytope_dict, domain_bounds=None):
         """ Alternate constructor of Polytope object """
         return cls(polytope_dict['poly_a'],
                    polytope_dict['poly_b'],
-                   config=polytope_dict['configs'])
+                   config=polytope_dict['configs'],
+                   domain_bounds=domain_bounds)
+
+
+    @classmethod
+    def convert_domain_bounds(cls, domain_bounds, n):
+        """ Given domain bounds, which can take 3 forms, converts them into
+            a constraint matrix and vector pair (A,b) such that the domain is
+            {x | Ax <= b}
+        ARGS:
+            domain_bounds: None, [(lo, hi)], [(lo_1, hi_1), ..., (lo_n, hi_n)]
+                - If None, no domain bounds
+                - If a singleton list, has that bound for all dimensionss
+                - If length n list, has custom bounds for every set
+            n: int - dimension of polytope
+        RETURNS:
+            (None, None) or (A (array[2n][n]), b (array[2n]))
+        """
+        if domain_bounds is None:
+            return (None, None)
+        else:
+            A_upper = np.eye(n)
+            A_lower = -1 * np.eye(n)
+            assert isinstance(domain_bounds, list)
+            if len(domain_bounds) == 1:
+                domain_low, domain_high = domain_bounds[0]
+                b_lower = -1 * domain_low * np.zeros(n)
+                b_upper = domain_high * np.zeros(n)
+            else:
+                b_lower = -1 * np.array([_[0] for _ in domain_bounds])
+                b_upper = np.array([_[1] for _ in domain_bounds])
+
+            domain_a = np.vstack((A_upper, A_lower))
+            domain_b = np.hstack((b_upper, b_lower))
+
+            return (domain_a, domain_b)
+
+
+
 
     ##########################################################################
     #       GENERATES FACETS FOR USE IN GEOCERT ALGORITHM                    #
@@ -84,7 +135,8 @@ class Polytope(object):
             If the output[0] of this is True, then facet is feasible and dim (n-1)
         """
         if facet is None:
-            facet = Face(self.ub_A, self.ub_b, [tight_idx], config=self.config)
+            facet = Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
+                         _domain_structure=self._domain_structure)
 
         #print("PID: ", os.getpid(), " TIGHT LIST:", tight_idx)
         if upper_bound_dict is not None:
@@ -130,7 +182,8 @@ class Polytope(object):
         num_constraints = self.ub_A.shape[0]
         facets = []
         for i in range(num_constraints):
-            facet = Face(self.ub_A, self.ub_b, [i], config=self.config)
+            facet = Face(self.ub_A, self.ub_b, [i], config=self.config,
+                         _domain_structure=self._domain_structure)
             if check_feasible:
                 facet.check_feasible()
             facet.check_facet()
@@ -198,7 +251,8 @@ class Polytope(object):
 
         # Make all the facets first, and then only select the ones that matter
         base_facets = [Face(self.ub_A, self.ub_b, [i],
-                            config=self.config, removal_list=removal_list)
+                            config=self.config, removal_list=removal_list,
+                            _domain_structure=self._domain_structure)
                        for i in range(num_constraints)]
 
         ######################################################################
@@ -654,8 +708,10 @@ class Polytope(object):
 
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None,
-                 removal_list=None, use_domain_constraints=False):
-        super(Face, self).__init__(poly_a, poly_b, config=config)
+                 removal_list=None, domain_bounds=None, _domain_structure=None):
+        super(Face, self).__init__(poly_a, poly_b, config=config,
+                                   domain_bounds=domain_bounds,
+                                   _domain_structure=_domain_structure)
         self.poly_a = poly_a
         self.poly_b = poly_b
         self.a_eq = self.poly_a[tight_list]
@@ -666,17 +722,13 @@ class Face(Polytope):
         self.interior = None
         self.removal_list = removal_list
 
-        # Domain constraints
-        self.use_domain_constraints = use_domain_constraints
-        if use_domain_constraints:
-            A_upper = np.eye(self.poly_a.shape[1])
-            b_upper = np.ones(self.poly_a.shape[1])
-            A_lower = -1 * np.eye(self.poly_a.shape[1])
-            b_lower = np.zeros(self.poly_a.shape[1])
-
-            self.domain_a = np.vstack((A_upper, A_lower))
-            self.domain_b = np.hstack((b_upper, b_lower))
-        # End domain
+        # Set facet type
+        assert self._domain_structure is not None
+        num_constraints = self._domain_structure['num_constraints']
+        if any(tight_el >= num_constraints for tight_el in tight_list):
+            self.facet_type = 'domain'
+        else:
+            self.facet_type = 'facet'
 
 
     def check_feasible(self):
@@ -694,12 +746,6 @@ class Face(Polytope):
 
         A_ub = self.poly_a
         b_ub = self.poly_b
-
-        # Add domain constraints
-        if self.use_domain_constraints:
-            A_ub = np.vstack((A_ub, self.domain_a))
-            b_ub = np.hstack((b_ub, self.domain_b))
-        # Domain constraints
 
         cvxopt_out = solvers.lp(matrix(c), matrix(A_ub), matrix(b_ub),
                                 A=matrix(self.a_eq), b=matrix(self.b_eq),
@@ -764,12 +810,12 @@ class Face(Polytope):
         a_eq_new[:, :-1] = self.a_eq
 
         # Add domain constraints
-        if self.use_domain_constraints:
+        if self.domain_a is not None:
             domain_a = np.hstack((self.domain_a,
                                   np.zeros((self.domain_a.shape[0], 1))))
             new_poly_a = np.vstack((new_poly_a, domain_a))
             new_poly_b = np.hstack((new_poly_b, self.domain_b))
-        #
+
 
 
         # Setup and solve the linear program using scipy
