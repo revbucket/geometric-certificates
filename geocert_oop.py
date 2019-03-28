@@ -307,7 +307,7 @@ class IncrementalGeoCert(object):
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
             facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet, facet_type=decision,
+            heap_el = HeapElement(facet_distance, facet, facet_type='decision',
                                   exact_or_estimate='exact')
             heap_el.projection = projection
             if self.upper_bound is None or facet_distance < self.upper_bound:
