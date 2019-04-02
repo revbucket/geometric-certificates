@@ -47,6 +47,19 @@ def flatten_config(config):
     return ''.join(str(_) for _ in cat_config.numpy())
 
 
+def index_to_config_coord(config, index):
+    """ Given an index of the flattened array, returns the 2d index of where
+        this corresponds to the configs
+    """
+    config_shapes = [_.numel() for _ in config]
+    assert index < sum(config_shapes)
+
+    for i, config_len in enumerate(config_shapes):
+        if index > config_len - 1:
+            index -= config_len
+        else:
+            return (i, index)
+
 
 ##############################################################################
 #                                                                            #
@@ -65,6 +78,7 @@ def comparison_form(A, b, tolerance=global_tolerance):
     A is a 2d numpy array of shape (m,n)
     b is a 1d numpy array of shape (m)
     """
+    raise DeprecationWarning("DON'T DO THIS OUTSIDE OF BATCH ")
     m, n = A.shape
     # First scale all constraints to have b = +-1, 0
     b_abs = np.abs(b)
@@ -105,6 +119,40 @@ def fuzzy_vector_equal(x_vec, y_vec, tolerance=global_tolerance):
         x_vec, y_vec are 1d numpy arrays
      """
     return all(abs(el) < tolerance for el in x_vec - y_vec)
+
+
+def is_same_hyperplane_nocomp(a1, b1, a2, b2, tolerance=global_tolerance):
+    """ Check same hyperplane when not comparison form """
+
+    # Check that neither a is zero
+    a1_zero = fuzzy_equal(np.linalg.norm(a1), 0, tolerance=tolerance)
+    a2_zero = fuzzy_equal(np.linalg.norm(a1), 0, tolerance=tolerance)
+    b1_zero = fuzzy_equal(b1, 0.0, tolerance=tolerance)
+    b2_zero = fuzzy_equal(b2, 0.0, tolerance=tolerance)
+
+    # If exactly one is zero, then they can't be equal
+    if (a1_zero != a2_zero) or (b1_zero != b2_zero):
+        return False
+
+    # Then find if there's a ratio between the two
+    first_nonzero_idx = None
+    for i, el in enumerate(a1):
+        if not fuzzy_equal(el , 0.0, tolerance):
+            first_nonzero_idx = i
+            break
+    two_one_ratio = a2[first_nonzero_idx] / a1[first_nonzero_idx]
+
+    # If this ratio is zero, return False
+    if fuzzy_equal(two_one_ratio, 0.0, tolerance=tolerance):
+        return False
+
+    # If the vectors aren't parallel, return False
+    if not fuzzy_vector_equal(two_one_ratio * a1, a2, tolerance=tolerance):
+        return False
+
+    # If the biases aren't equal, return false, o.w. return True
+    return fuzzy_equal(two_one_ratio * b1, b2, tolerance=tolerance)
+
 
 
 def is_same_hyperplane(a1, b1, a2, b2, tolerance=global_tolerance):
@@ -415,6 +463,120 @@ def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
     return solved, opt_model
 
 
+##########################################################################
+#                                                                        #
+#                     Geometric Utilities                                #
+#                                                                        #
+##########################################################################
+
+from mosek.fusion import Expr, Domain, Matrix, Var, Model, ObjectiveSense
+
+
+def geometric_mean(M, x, t):
+    '''
+    Models the convex set
+
+      S = { (x, t) \in R^n x R | x >= 0, t <= (x1 * x2 * ... * xn)^(1/n) }
+
+    using three-dimensional power cones
+    '''
+    try:
+        n = int(x.getSize())
+    except:
+        n = x.size()
+
+    if n==1:
+      M.constraint(Expr.sub(t, x), Domain.lessThan(0.0))
+    else:
+      t2 = M.variable()
+      M.constraint(Var.hstack(t2, x.index(n-1), t), Domain.inPPowerCone(1-1.0/n))
+      geometric_mean(M, x.slice(0,n-1), t2)
+
+
+
+def det_rootn(M, t, n):
+    '''
+     Purpose: Models the hypograph of the n-th power of the
+     determinant of a positive definite matrix. See [1,2] for more details.
+
+       The convex set (a hypograph)
+
+       C = { (X, t) \in S^n_+ x R |  t <= det(X)^{1/n} },
+
+       can be modeled as the intersection of a semidefinite cone
+
+       [ X, Z; Z^T Diag(Z) ] >= 0
+
+       and a number of rotated quadratic cones and affine hyperplanes,
+
+       t <= (Z11*Z22*...*Znn)^{1/n}  (see geometric_mean).
+    '''
+
+    # Setup variables
+    Y = M.variable(Domain.inPSDCone(2 * n))
+
+    # Setup Y = [X, Z; Z^T , diag(Z)]
+    X   = Y.slice([0, 0], [n, n])
+    Z   = Y.slice([0, n], [n, 2 * n])
+    DZ  = Y.slice([n, n], [2 * n, 2 * n])
+
+    # Z is lower-triangular
+    M.constraint(Z.pick([[i,j] for i in range(n) for j in range(i+1,n)]), Domain.equalsTo(0.0))
+    # DZ = Diag(Z)
+    M.constraint(Expr.sub(DZ, Expr.mulElm(Z, Matrix.eye(n))), Domain.equalsTo(0.0))
+
+    # t^n <= (Z11*Z22*...*Znn)
+    geometric_mean(M, DZ.diag(), t)
+
+    # Return an n x n PSD variable which satisfies t <= det(X)^(1/n)
+    return X
+
+
+def MVIE_ellipse(A, b):
+    '''
+      The inner ellipsoidal approximation to a polytope
+
+         S = { x \in R^n | Ax < b }.
+
+      maximizes the volume of the inscribed ellipsoid,
+
+         { x | x = C*u + d, || u ||_2 <= 1 }.
+
+      The volume is proportional to det(C)^(1/n), so the
+      problem can be solved as
+
+        maximize         t
+        subject to       t       <= det(C)^(1/n)
+                    || C*ai ||_2 <= bi - ai^T * d,  i=1,...,m
+                    C is PSD
+
+      which is equivalent to a mixed conic quadratic and semidefinite
+      programming problem.
+    '''
+
+    A = A.tolist()
+    b = b.tolist()
+    with Model("lownerjohn_inner") as M:
+        # M.setLogHandler(sys.stdout)   # output of solver
+        m, n = len(A), len(A[0])
+
+        # Setup variables
+        t = M.variable("t", 1, Domain.greaterThan(0.0))
+        C = det_rootn(M, t, n)
+        d = M.variable("d", n, Domain.unbounded())
+
+        # (b-Ad, AC) generate cones
+        M.constraint("qc", Expr.hstack(Expr.sub(b, Expr.mul(A, d)), Expr.mul(A, C)),
+                     Domain.inQCone())
+
+        # Objective: Maximize t
+        M.objective(ObjectiveSense.Maximize, t)
+
+        M.solve()
+        C, d = C.level(), d.level()
+        C = [C[i:i + n] for i in range(0, n * n, n)]
+        return C, d
+
 
 ##########################################################################
 #                                                                        #
@@ -504,13 +666,14 @@ def plot_facets_2d(facet_list, alpha=1.0,
 def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots linf norm ball of size t centered at x_0 (only in R^2)
     """
+    x_0 = as_numpy(x_0).reshape(2)
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
 def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
-
+    x_0 = as_numpy(x_0).reshape(2)
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
 
@@ -565,7 +728,7 @@ def plot_ellipse(P, c, ax=plt.axes()):
 # ------------------------------------
 # Polytope class from PyPi
 # ------------------------------------
-""" Modified class is used for plotting polytopes and utilizing other functions 
+""" Modified class is used for plotting polytopes and utilizing other functions
     from 'polytope' library
 """
 
@@ -697,6 +860,14 @@ def as_numpy(tensor_or_array):
 #                            Misc. Utilities                             #
 #                                                                        #
 ##########################################################################
+
+def star_arg(fxn):
+    """ Maps function taking multiple arguments to function taking a single
+        tuple of args
+    """
+    def star_fxn(args, fxn=fxn):
+        return fxn(*args)
+    return star_fxn
 
 
 def _newax(ax=None):

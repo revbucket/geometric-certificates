@@ -6,7 +6,7 @@ import utilities as utils
 from collections import OrderedDict
 import numpy as np
 
-
+import time
 
 
 class PLNN(nn.Module):
@@ -81,7 +81,8 @@ class PLNN(nn.Module):
         else:
             return configs
 
-    def make_adversarial_constraints(self, configs, true_label):
+    def make_adversarial_constraints(self, configs, true_label,
+                                     domain_bounds=None):
         """ Given a config computes the linear map in terms of this config
             for all neurons INCLUDING the output neurons (logits) and generates
             the polytope constraints for the neuron config and
@@ -89,6 +90,7 @@ class PLNN(nn.Module):
 
             configs - as usual
             true_label -
+
         """
         # Find all adversarial constraints
         polytope_config = self.compute_polytope_config(configs)
@@ -111,6 +113,7 @@ class PLNN(nn.Module):
 
         # Append a row constraint for each of the logits except the true one
         facets = []
+        flat_config = utils.flatten_config(configs)
         for i in range(num_logits):
             if i == true_label:
                 continue
@@ -119,7 +122,8 @@ class PLNN(nn.Module):
 
             new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
                              np.hstack((poly_b, constraint_b_to_add)),
-                             [num_constraints], config=None)
+                             [num_constraints], config=flat_config,
+                             domain_bounds=domain_bounds)
             new_facet.check_feasible()
             if new_facet.is_feasible:
                 facets.append(new_facet)
@@ -128,7 +132,7 @@ class PLNN(nn.Module):
 
 
 
-    def compute_polytope_config(self, configs, comparison_form_flag=True):
+    def compute_polytope_config(self, configs, comparison_form_flag=False):
 
         lambdas = [torch.diag(config) for config in configs]
         js = [torch.diag(-2 * config + 1) for config in configs]
@@ -164,7 +168,7 @@ class PLNN(nn.Module):
                 'total_b': bks[-1]
                 }
 
-    def compute_polytope(self, x, comparison_form_flag=True):
+    def compute_polytope(self, x, comparison_form_flag=False):
         pre_relus, configs = self.relu_config(x, return_pre_relus=True)
         poly_out = self.compute_polytope_config(configs, comparison_form_flag)
         poly_out['pre_relus'] = pre_relus
@@ -210,4 +214,5 @@ class PLNN_seq(PLNN):
     def __init__(self, sequential, layer_sizes, dtype=torch.FloatTensor):
         super(PLNN_seq, self).__init__(layer_sizes, dtype)
         self.fcs = [layer for layer in sequential if type(layer) == nn.Linear]
+
         self.net = sequential

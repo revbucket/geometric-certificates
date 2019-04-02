@@ -3,7 +3,7 @@
 
 """
 
-from _polytope_ import Polytope, Face, from_polytope_dict
+from _polytope_ import Polytope, Face
 import utilities as utils
 import torch
 import numpy as np
@@ -33,11 +33,10 @@ def batch_GeoCert(polytope_list, x, norm='l_2', comp_method='slow'):
     boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
 
     if norm == 'l_inf':
-        dist_to_boundary = [facet.linf_dist(x) for facet in boundary]
+        dist_to_boundary = [facet.linf_dist(x)[0] for facet in boundary]
     elif norm == 'l_2':
-        dist_to_boundary = [facet.l2_dist(x) for facet in boundary]
-    else:
-        raise NotImplementedError
+        dist_to_boundary = [facet.l2_dist(x)[0] for facet in boundary]
+
 
     return min(dist_to_boundary), boundary, shared_facets
 
@@ -134,7 +133,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1
     ###########################################################################
     print('---Initial Polytope---')
     p_0_dict = net.compute_polytope(x, True)
-    p_0 = from_polytope_dict(p_0_dict)
+    p_0 = Polytope.from_polytope_dict(p_0_dict)
     geocert_update_step(lp_norm, net, x, p_0, None, pq, true_label,
                         seen_to_polytope_map, seen_to_facet_map)
 
@@ -177,7 +176,7 @@ def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1
             # If polytope has already been seen, don't add it again
             if new_configs_flat not in seen_to_polytope_map:
                 new_polytope_dict = net.compute_polytope_config(new_configs, True)
-                new_polytope = from_polytope_dict(new_polytope_dict)
+                new_polytope = Polytope.from_polytope_dict(new_polytope_dict)
                 geocert_update_step(lp_norm, net, x, new_polytope, popped_facet, pq, true_label,
                                     seen_to_polytope_map, seen_to_facet_map)
 
@@ -197,8 +196,9 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
         pushes facets to the heap, and updates seen maps
     '''
 
-    polytope_facets = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
-    print('num added facets: ', len(polytope_facets))
+    polytope_facets, reject_reasons = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
+    print('num facets: ', len(polytope_facets))
+
 
     polytope_config = utils.flatten_config(polytope.config)
     polytope_adv_constraints = net.make_adversarial_constraints(polytope.config,
@@ -232,9 +232,9 @@ def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_
 
 def get_lp_dist(lp_norm, facet, x):
     if lp_norm == 'l_2':
-        return facet.l2_dist(x)
+        return facet.l2_dist(x)[0]
     elif lp_norm == 'l_inf':
-        return facet.linf_dist(x)
+        return facet.linf_dist(x)[0]
     else:
         raise NotImplementedError
 
@@ -245,8 +245,16 @@ def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
         the current minimal lp ball, and any classification boundary facets
     '''
 
-    fig, ax = plt.subplots()
 
+    # Check x is 2dimensional
+    if np.shape(x)[1] != 2:
+        return
+
+    # Plot Polytopes, etc.
+
+    plt.figure(figsize=[10, 10])
+    if ax is None:
+        ax = plt.axes()
     polytope_list = [seen_to_polytope_map[elem] for elem in seen_to_polytope_map]
     facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if not heap_elem.decision_bound]
     boundary_facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if heap_elem.decision_bound]

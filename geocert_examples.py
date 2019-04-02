@@ -325,6 +325,9 @@ lp_norm = 'l_2'
 ts = []
 pts = x[0:1]
 
+cwd = os.getcwd()
+plot_dir = cwd + '/plots/incremental_geocert/'
+
 for pt in pts:
     print('===============Finding Projection============')
     print('lp_norm: ', lp_norm)
@@ -334,11 +337,15 @@ for pt in pts:
     print(x_0)
 
     ax = plt.axes()
+<<<<<<< HEAD
     cwd = os.getcwd()
     print(cwd)
     plot_dir = cwd + '/plots/incremental_geocert/'
 
     t = incremental_GeoCert(lp_norm, network, x_0, ax, plot_dir, plot_iter=1)
+=======
+    t = incremental_GeoCert(lp_norm, network, x_0, ax, plot_dir)
+>>>>>>> mister-ed
 
     print('the final projection value:', t)
     ts.append(t)
