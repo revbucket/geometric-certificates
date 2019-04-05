@@ -299,7 +299,7 @@ class IncrementalGeoCert(object):
 
 
 
-    def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
+    def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False, max_iter=np.infty):
         """ Returns the minimum distance between x and the decision boundary.
             Plots things too, I guess...
         """
@@ -379,7 +379,8 @@ class IncrementalGeoCert(object):
         ######################################################################
 
         index = 0
-        while True:
+
+        while True and (index <= max_iter):
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound:
@@ -407,11 +408,13 @@ class IncrementalGeoCert(object):
             if index % 1 == 0 and self.display:
                 self.plot_2d(pop_el.lp_dist, iter=index)
             index += 1
-
-        self._verbose_print('----------Minimal Projection Generated----------')
-        self._verbose_print("DIST: ", pop_el.lp_dist)
-        if self.display:
-            self.plot_2d(pop_el.lp_dist, iter=index)
+        if index < max_iter:
+            self._verbose_print('----------Minimal Projection Generated----------')
+            self._verbose_print("DIST: ", pop_el.lp_dist)
+            if self.display:
+                self.plot_2d(pop_el.lp_dist, iter=index)
+        else:
+            self._verbose_print('------------- Max Iter Reached -----------')
         adver_examp = pop_el.projection
         return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
 

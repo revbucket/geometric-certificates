@@ -10,7 +10,7 @@ from cvxopt import matrix, solvers
 solvers.options['show_progress'] = False
 import copy
 import pickle
-import joblib
+# import joblib
 
 import time
 
@@ -234,23 +234,29 @@ class Polytope(object):
                     continue
                 status, out = self.handle_single_facet(None, upper_bound_dict,
                                                        facet=facet)
-                if status: # if feasible, within bounds, nad facet
-                    status_2, out = self.finish_single_facet(out, seen_dict)
-                    status = status_2 & status
+                # if status: # if feasible, within bounds, nad facet
+                #     status_2, out = self.finish_single_facet(out, seen_dict)
+                #     status = status_2 & status
                 if not status:
                     reject_reasons[out] = reject_reasons.get(out, 0) + 1
                     removal_list[i] = True
 
 
-        ######################################################################
-        #   Step Final: Remove facets that have been seen before             #
-        ######################################################################
+        # ######################################################################
+        # #   Step Final: Remove facets that have been seen before             #
+        # ######################################################################
+        # surviving_facets = [_ for i, _ in enumerate(base_facets) if not
+        #                     removal_list[i]]
+        # facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict,
+        #                                           net)
+        # if num_seen > 0:
+        #     reject_reasons['seen before'] = num_seen
+
         surviving_facets = [_ for i, _ in enumerate(base_facets) if not
-                            removal_list[i]]
-        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict,
-                                                  net)
-        if num_seen > 0:
-            reject_reasons['seen before'] = num_seen
+                              removal_list[i]]
+
+        facets = surviving_facets
+
         return facets, reject_reasons
 
 
