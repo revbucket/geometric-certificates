@@ -17,7 +17,7 @@ from plnn import PLNN_seq, PLNN
 from geocert_oop import IncrementalGeoCert
 import matplotlib.pyplot as plt
 import numpy as np
-from _polytope_ import from_polytope_dict, Face
+from _polytope_save import from_polytope_dict, Face
 import utilities as utils
 import time
 import torch.optim as optim

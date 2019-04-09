@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from _polytope_ import Polytope, Face
+from _polytope_save import Polytope, Face
 import utilities as utils
 from collections import OrderedDict
 import numpy as np

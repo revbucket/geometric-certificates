@@ -11,7 +11,7 @@ import loss_functions as lf
 import adversarial_attacks as aa
 import utils.pytorch_utils as me_utils
 
-from _polytope_ import Polytope, Face
+from _polytope_save import Polytope, Face
 import utilities as utils
 import torch
 import numpy as np

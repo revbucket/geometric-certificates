@@ -9,7 +9,7 @@ import numpy as np
 from geocert_oop import IncrementalGeoCert
 from utilities import Polytope_2
 import polytope as poly_lib
-from _polytope_ import Polytope
+from _polytope_save import Polytope
 import matplotlib.pyplot as plt
 
 # ##########################################################################
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 
 # ------ Initialize Net ---------
 print('===============Initializing Network============')
-input_dim = 10
+input_dim = 5
 layer_sizes = [input_dim, 50, 50, 2]
 network = PLNN(layer_sizes)
 x_0_np = np.random.randn(1, input_dim)
@@ -50,10 +50,10 @@ polytopes = geocert.seen_to_polytope_map.values()
 #  Estimate volume of polytopes found
 # ===============================================
 
-# for poly in polytopes:
-#     a_polytope = Polytope_2(poly.ub_A, poly.ub_b)
-#     extreme_pts = poly_lib.extreme(a_polytope)
-#     print('num_ex_pts:', len(extreme_pts))
+for poly in polytopes:
+    a_polytope = Polytope_2(poly.ub_A, poly.ub_b)
+    extreme_pts = poly_lib.extreme(a_polytope)
+    print('num_ex_pts:', len(extreme_pts))
 
 volumes = []
 for poly in polytopes:

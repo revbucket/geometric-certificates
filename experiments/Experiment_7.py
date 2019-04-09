@@ -11,7 +11,7 @@
 
 from geocert import compute_boundary_batch, batch_GeoCert, incremental_GeoCert
 from plnn import PLNN
-from _polytope_ import Polytope, from_polytope_dict
+from _polytope_save import Polytope, from_polytope_dict
 import utilities as utils
 import matplotlib.pyplot as plt
 import numpy as np

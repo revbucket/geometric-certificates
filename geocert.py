@@ -3,7 +3,7 @@
 
 """
 
-from _polytope_ import Polytope, Face
+from _polytope_save import Polytope, Face
 import utilities as utils
 import torch
 import numpy as np

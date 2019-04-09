@@ -5,7 +5,7 @@
 from plnn import PLNN
 import torch
 import numpy as np
-from _polytope_ import Polytope
+from _polytope_save import Polytope
 import matplotlib.pyplot as plt
 
 # ##########################################################################
