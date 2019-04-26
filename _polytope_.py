@@ -1144,9 +1144,6 @@ class Face(Polytope):
         """ Returns the l_2 distance to point x using LP
             as well as the optimal value of the program"""
 
-        n = np.shape(self.poly_a)[1]
-        x = utils.as_numpy(x).reshape(n, -1)
-
         # set up the quadratic program
         # min_{v} v^T*v
         # s.t.

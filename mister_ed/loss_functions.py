@@ -81,7 +81,7 @@ class RegularizedLoss(object):
         """ Setup before calling loss on a new minibatch. Ensures the correct
             fix_im for reference regularizers and that all grads are zeroed
         ARGS:
-            fix_im: Variable (NxCxHxW) - Ground images for this minibatch
+            fix_im: VariaIle (NxCxHxW) - Ground images for this minibatch
                     SHOULD BE IN [0.0, 1.0] RANGE
         """
         for loss in self.losses.values():
@@ -472,12 +472,16 @@ class LpipsRegularization(ReferenceRegularizer):
 
         self.dist_model = dm.DistModel(net='alex', manual_gpu=self.use_gpu)
 
+        self.scale_by_numel = kwargs.get('scale_by_numel', False)
+
     def forward(self, examples, *args, **kwargs):
         xform = lambda im: im * 2.0 - 1.0
         perceptual_loss = self.dist_model.forward_var(examples,
                                                       self.fix_im)
-
+        if self.scale_by_numel:
+            perceptual_loss /= examples[0].numel()
         return perceptual_loss.squeeze()
+
 
 #############################################################################
 #                         SSIM PERCEPTUAL REGULARIZATION                    #
@@ -568,8 +572,6 @@ class PerturbationNormLoss(PartialLoss):
         assert isinstance(perturbation, ap.AdversarialPerturbation)
 
         return perturbation.perturbation_norm(lp_style=self.lp)
-
-
 
 
 ##############################################################################

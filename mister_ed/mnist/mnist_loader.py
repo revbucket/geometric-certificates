@@ -83,4 +83,3 @@ def load_mnist_data(train_or_val, extra_args=None, dataset_dir=None,
 
 
 
-
