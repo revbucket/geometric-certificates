@@ -132,7 +132,8 @@ class PLNN(nn.Module):
 
 
 
-    def compute_polytope_config(self, configs, comparison_form_flag=False):
+    def compute_polytope_config(self, configs, comparison_form_flag=False,
+                                uncertain_constraints=None):
 
         lambdas = [torch.diag(config) for config in configs]
         js = [torch.diag(-2 * config + 1) for config in configs]
@@ -202,6 +203,42 @@ class PLNN(nn.Module):
         for fc in self.fcs[:-1]:
             x = F.relu(fc(x))
         return self.fcs[-1](x) # No ReLu on the last one
+
+
+    def compute_interval_bounds(self, box):
+        """ For each neuron computes a bound for the range of values each
+            pre-ReLU can take.
+        ARGS:
+            box : Tensor, of dimension shape (n, 2) for box constraints
+        RETURNS:
+            returned_bounds : list of tensors giving pre-Relu bounds
+            uncertain_set: list of tensors with 1 if uncertain about this
+                           neuron in the list
+            list of length (# fully connected layers - 1), where each element
+            is a tensor of shape (num_neurons, 2) for the bounds for the preReLU
+        """
+        # setup + asserts
+        assert all(box[0] <= box[1])
+
+        midpoint_matrix = torch.Tensor([[1.0], [1.0]]) / 2.0
+        ranges_matrix = torch.Tensor([[-1.0], [1.0]]) / 2.0
+        returned_bounds = []
+        dead_set = [] # list of tensors, 1 if always on or off
+        working_bounds = box
+        for fc in self.fcs[:-1]:
+            weight, bias = fc.weight, fc.bias
+            midpoint = torch.matmul(working_bounds, midpoint_matrix)
+            ranges = torch.matmul(working_bounds, ranges_matrix)
+            new_midpoint = torch.matmul(weight, midpoint) + bias.view(-1, 1)
+            new_ranges = torch.matmul(torch.abs(weight), ranges)
+            pre_relus = torch.cat([new_midpoint - new_ranges,
+                                   new_midpoint + new_ranges], 1)
+
+            dead_set.append((pre_relus[:,0] * pre_relus[:,1]) >= 0)
+            returned_bounds.append(pre_relus)
+            working_bounds = F.relu(pre_relus)
+
+        return returned_bounds, dead_set
 
 
 class PLNN_seq(PLNN):

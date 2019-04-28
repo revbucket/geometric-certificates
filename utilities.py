@@ -37,14 +37,18 @@ def hamming_indices(str1, str2):
 
     return indices
 
+def cat_config(conf):
+    """ Takes a list of float or uint8 tensors and flattens them into np.ndarray
+    """
+    return torch.cat([_.cpu().type(torch.uint8).detach() for _ in conf]).numpy()
+
 
 def flatten_config(config):
     """ Takes a list of floatTensors where each element is either 1 or 0
         and converts into a string of 1s and 0s.
         Is just a binary representation of the neuron config
     """
-    cat_config = torch.cat([_.cpu().type(torch.uint8).detach() for _ in config])
-    return ''.join(str(_) for _ in cat_config.numpy())
+    return ''.join(str(_) for _ in cat_config(config))
 
 
 def index_to_config_coord(config, index):

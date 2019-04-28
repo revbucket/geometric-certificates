@@ -368,8 +368,8 @@ class PGD(AdversarialAttack):
         self.validator(var_examples, var_labels, iter_no="START")
 
         # random initialization if necessary
-        if random_init:
-            perturbation.random_init()
+        if random_init is not False:
+            perturbation.random_init(random_init)
             self.validator(perturbation(var_examples), var_labels,
                            iter_no="RANDOM")
 

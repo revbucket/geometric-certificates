@@ -16,9 +16,10 @@ import utilities as utils
 import torch
 import numpy as np
 import heapq
+import time
 import matplotlib.pyplot as plt
 
-
+import torch.nn.functional as F
 
 ##############################################################################
 #                                                                            #
@@ -101,7 +102,7 @@ class BatchGeoCert(object):
         return unshared_facets, shared_facets
 
 
-    def min_dist(self, x, norm='l_2'):
+    def min_dist(self, x, norm='l_261'):
         """ Returns the minimum distance from self.x to the boundary of the
             polytopes.
         ARGS:
@@ -145,7 +146,7 @@ class HeapElement(object):
         in the incremental algorithm
     """
     def __init__(self, lp_dist, facet,
-                 facet_type='facet',                                  
+                 facet_type='facet',
                  exact_or_estimate='exact'):
         self.lp_dist = lp_dist
         self.facet = facet
@@ -168,7 +169,7 @@ class HeapElement(object):
 class IncrementalGeoCert(object):
     def __init__(self, net, verbose=True, display=False, save_dir=None,
                  ax=None, config_fxn='serial',
-                 config_fxn_kwargs=None, 
+                 config_fxn_kwargs=None,
                  domain_bounds=None):
 
         # Direct input state
@@ -181,7 +182,7 @@ class IncrementalGeoCert(object):
         self.save_dir = save_dir
         self.ax = ax
         facet_config_map = {'serial': Polytope.generate_facets_configs,
-                            'parallel': Polytope.generate_facets_configs_parallel}
+                            'parallel': Polytope.generate_facets_configs_parallel2}
         self.facet_config_fxn = facet_config_map[config_fxn]
         if config_fxn_kwargs is None:
             if config_fxn == 'parallel':
@@ -195,17 +196,17 @@ class IncrementalGeoCert(object):
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
-        self.upper_bound = None
+        self.upper_bound = [None] # wrapped in a dynamic object
+        self.dead_constraints = [None] # wrapped in a dynamic object
 
-        # Handle domain bounds 
-        # Is either None, a single pair (lo, hi), or a list of pairs of length     
-        # input-dimension(net). Provides box constraints for the domain of the     
-        # search. These constraints get thrown in to the polytope and facet                
+        # Handle domain bounds
+        # Is either None, a single pair (lo, hi), or a list of pairs of length
+        # input-dimension(net). Provides box constraints for the domain of the
+        # search. These constraints get thrown in to the polytope and facet
         assert domain_bounds is None or\
-               (isinstance(domain_bounds, list) and 
+               (isinstance(domain_bounds, list) and
                 all(isinstance(_, tuple) for _ in domain_bounds))
         self.domain_bounds = domain_bounds
-
 
 
     def _verbose_print(self, *args):
@@ -213,40 +214,122 @@ class IncrementalGeoCert(object):
             print(*args)
 
 
-    def _carlini_wagner_l2_upper(self, x):
-        l2_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
-                                                      'lp_bound': 1.0})
+    def _compute_upper_bounds(self, x, true_label, lp_dist,
+                              extra_attack_kwargs=None):
+        """ Runs an adversarial attack to compute an upper bound on the
+            distance to the decision boundary.
+
+            In the l_inf case, we compute the constraints that are always
+            on or off in the specified upper bound
+
+        """
+        self._verbose_print("Starting upper bound computation")
+
+        start = time.time()
+        upper_bound, adv_ex = self._pgd_upper_bound(x, true_label, self.lp_norm,
+                                              extra_kwargs=extra_attack_kwargs)
+
+        if upper_bound is None:
+            self._verbose_print("Upper bound failed in %.02f seconds" %
+                                (time.time() - start))
+        else:
+            self._verbose_print("Upper bound of %s in %.02f seconds" %
+                                (upper_bound, time.time() - start))
+            self._update_dead_constraints(x, upper_bound)
+
+        return upper_bound, adv_ex
+
+    def _pgd_upper_bound(self, x, true_label, lp_norm, num_repeats=64,
+                         extra_kwargs=None):
+
+        ######################################################################
+        #   Setup attack object                                              #
+        ######################################################################
+        norm = {'l_inf': 'inf', 'l_2': 2}[lp_norm]
+        linf_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
+                                                        'lp_bound': 1.0})
         normalizer = me_utils.IdentityNormalize()
 
-        # Do a carlini wagner L2 and if it's successful we have a great
-        # upper bound!
-        distance_fxn = lf.L2Regularization
-        carlini_loss = lf.CWLossF6
-        cwl2_attack = aa.CarliniWagner(self.net, normalizer, l2_threat,
-                                       distance_fxn, carlini_loss,
-                                       manual_gpu=False)
-        attack_kwargs = {'warm_start': False,
-                         'num_optim_steps': 2000,
-                         'num_bin_search_steps': 10,
-                         'initial_lambda': 100.0,
+        loss_fxn = plf.VanillaXentropy(self.net, normalizer)
+
+        pgd_attack = aa.PGD(self.net, normalizer, linf_threat, loss_fxn,
+                            manual_gpu=False)
+        attack_kwargs = {'num_iterations': 1000,
+                         'random_init': 0.25,
+                         'signed': False,
                          'verbose': False}
 
-        pert_out = cwl2_attack.attack(x.view(1, -1),
-                                      torch.Tensor([self.true_label]).long(),
-                                      **attack_kwargs)
+        if isinstance(extra_kwargs, dict):
+            attack_kwargs.update(extra_kwargs)
+
+        ######################################################################
+        #   Setup 'minibatch' of randomly perturbed examples to try          #
+        ######################################################################
+
+        new_x = x.view(1, -1).repeat(num_repeats, 1)
+        labels = [true_label for _ in range(num_repeats)]
+        labels = torch.Tensor(labels).long()
+
+        ######################################################################
+        #   Run the attack and collect the best (if any) successful example  #
+        ######################################################################
+
+        pert_out = pgd_attack.attack(new_x, labels, **attack_kwargs)
+        pert_out = pert_out.binsearch_closer(self.net, normalizer, labels)
         success_out = pert_out.collect_successful(self.net, normalizer,
                                           success_def='alter_top_logit')
-        if success_out['success_idxs'].numel() > 0:
-
-            self.upper_bound = (success_out['adversarials'].squeeze(0) -
-                                torch.Tensor(x).view(1, -1)).norm().item()
-            self._verbose_print("CWL2 found an upper bound of:",
-                                self.upper_bound)
-            cw_bound = self.upper_bound
-            return self.upper_bound, pert_out.adversarial_tensors().squeeze(0)
-        else:
-            self._verbose_print("CWL2 failed to find an upper bound")
+        success_idxs = success_out['success_idxs']
+        if success_idxs.numel() == 0:
             return None, None
+
+        diffs = pert_out.delta.data.index_select(0, success_idxs)
+        max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
+        best_adv = success_out['adversarials'][max_idx].squeeze()
+        upper_bound = (best_adv - x.view(-1)).abs().max().item()
+        self.upper_bound[0] = upper_bound # assign dynamically
+        return self.upper_bound[0], best_adv
+
+
+    def _update_dead_constraints(self, x, upper_bound_val):
+        if self.lp_norm is not 'l_inf':
+            return
+
+        upper_bound = upper_bound_val # this is a float
+        x = torch.Tensor(x)
+        low_box = (x.view(-1) - upper_bound).unsqueeze(-1)
+        high_box = (x.view(-1) + upper_bound).unsqueeze(-1)
+
+        box_bounds = torch.cat((low_box, high_box), -1)
+
+        # modify with domain bounds too
+        box_bounds = self._intersect_box_domain(box_bounds)
+        box_bounds = self.net.compute_interval_bounds(box_bounds)[1]
+        dead_constraints = utils.cat_config(box_bounds)
+
+        # Wrap this in a list to update dynamically as we go
+        self.dead_constraints[0] = dead_constraints.astype(np.bool)
+
+
+    def _intersect_box_domain(self, box):
+        """ Given an (N x 2) tensor with upper and lower box bounds, we
+            intersect with the domain box bounds and return the tighter box
+        ARGS:
+            box : Tensor (N x 2): lower and upper box bounds
+        RETURNS:
+            box of same shape as input, but possibly smaller
+        """
+        if self.domain_bounds is None:
+            return box
+
+        if len(self.domain_bounds) == 1:
+            lo, hi = self.domain_bounds[0]
+        else:
+            domain_bounds = torch.Tensor(numpy.vstack(self.domain_bounds))
+            lo, hi = domain_bounds[:, 0], domain_bounds[:, 1]
+
+        box[:, 0] = F.relu(box[:, 0] - lo) + lo  # max(lo, box)
+        box[:, 1] = hi - F.relu(hi - box[:, 1])  # min(hi, box)
+        return box
 
 
     def _update_step(self, poly, popped_facet):
@@ -263,13 +346,14 @@ class IncrementalGeoCert(object):
             None, but modifies the heap
         """
 
-        # Step 1) Get the new facets, check their feasibility and keep track
+        ######################################################################
+        #   Generate new facets and check feasibility/interior point-ness    #
+        ######################################################################
         upper_bound_dict = None
         if self.upper_bound is not None:
             upper_bound_dict = {'upper_bound': self.upper_bound,
                                 'x': self.x.cpu().numpy(),
                                 'lp_norm': self.lp_norm,
-                                #'hypercube': [-1.0, 1.0]
                                 }
 
         new_facets, rejects = self.facet_config_fxn(poly,
@@ -279,30 +363,38 @@ class IncrementalGeoCert(object):
         self._verbose_print("Num facets: ", len(new_facets))
         self._verbose_print("REJECT DICT: ", rejects)
 
-
-        poly_config = utils.flatten_config(poly.config)
-        adv_constraints = self.net.make_adversarial_constraints(poly.config,
-                              self.true_label, domain_bounds=self.domain_bounds)
-        self.seen_to_polytope_map[poly_config] = poly
-        self.seen_to_facet_map[poly_config] = new_facets
-
-        # Step 2) For each new facet, add to queue
+        ######################################################################
+        #   Add new feasible facets to priority queue                        #
+        ######################################################################
         handled_popped_facet = (popped_facet == None)
         for facet in new_facets:
             if facet.facet_type == 'domain':
-                continue 
+                continue
             if (not handled_popped_facet) and\
                 popped_facet.facet.check_same_facet_config(facet):
                 handled_popped_facet = True
                 continue
             facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet, 
+            heap_el = HeapElement(facet_distance, facet,
                                   facet_type=facet.facet_type,
                                   exact_or_estimate='exact')
             heap_el.projection = projection
 
-            if self.upper_bound is None or facet_distance < self.upper_bound:
+            if (self.upper_bound[0] is None or
+                facet_distance < self.upper_bound[0]):
                 heapq.heappush(self.pq, heap_el)
+
+        poly_config = utils.flatten_config(poly.config)
+
+        self.seen_to_polytope_map[poly_config] = poly
+        self.seen_to_facet_map[poly_config] = new_facets
+
+        ######################################################################
+        #   Handle adversarial constraints                                   #
+        ######################################################################
+
+        adv_constraints = self.net.make_adversarial_constraints(poly.config,
+                              self.true_label, domain_bounds=self.domain_bounds)
 
         # Step 3) Adds the adversarial constraints
         for facet in adv_constraints:
@@ -310,13 +402,21 @@ class IncrementalGeoCert(object):
             heap_el = HeapElement(facet_distance, facet, facet_type='decision',
                                   exact_or_estimate='exact')
             heap_el.projection = projection
-            if self.upper_bound is None or facet_distance < self.upper_bound:
+            if (self.upper_bound[0] is None or
+                facet_distance < self.upper_bound[0]):
                 heapq.heappush(self.pq, heap_el)
+            else:
+                if len(self.pq) == 0:
+                    raise Exception("WHAT IS GOING ON???")
 
             # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
-            if self.upper_bound is None or facet_distance < self.upper_bound:
-                self.upper_bound = facet_distance
+            if (self.upper_bound[0] is None or
+                facet_distance < self.upper_bound[0]):
+                self.upper_bound[0] = facet_distance
 
+                # also update dead constraints for all facets
+                self._update_dead_constraints(self.x.cpu().numpy(),
+                                              self.upper_bound[0])
 
 
     def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
@@ -341,29 +441,23 @@ class IncrementalGeoCert(object):
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
-        self.upper_bound = None
+        self.upper_bound = [None]
+        self.dead_constraints = [None] # wrapped in a dynamic object
 
-        #####################################################################
-        #   Step 0b: If compute upper bound, compute the upper bound radius #
-        #####################################################################
-        cw_bound = None
-        cw_example = None
-        upper_bound_dist = None
-        if compute_upper_bound:
-            if lp_norm == 'l_2':
-                self._verbose_print("Starting CW Upper Bound")
-                upper_bound, cw_example = self._carlini_wagner_l2_upper(x)
-            else:
-                pass
-
+        if compute_upper_bound is not False:
+            adv_bound, adv_ex = self._compute_upper_bounds(x, self.true_label,
+                                                           lp_norm,
+                                       extra_attack_kwargs=compute_upper_bound)
 
         ######################################################################
         #   Step 1: handle the initial polytope                              #
         ######################################################################
         self._verbose_print('---Initial Polytope---')
-        p_0_dict = self.net.compute_polytope(self.x, False)
-        p_0 = Polytope.from_polytope_dict(p_0_dict, 
-                                          domain_bounds=self.domain_bounds)
+        p_0_dict = self.net.compute_polytope(self.x, comparison_form_flag=False)
+
+        p_0 = Polytope.from_polytope_dict(p_0_dict,
+                                          domain_bounds=self.domain_bounds,
+                                         dead_constraints=self.dead_constraints)
         self._update_step(p_0, None)
 
         ######################################################################
@@ -371,7 +465,8 @@ class IncrementalGeoCert(object):
         ######################################################################
 
         index = 0
-        print(len(self.pq))
+        if len(self.pq) == 0:
+            print("Messed up in the first block??")
         prev_min_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
         while True:
             min_el_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
@@ -381,8 +476,6 @@ class IncrementalGeoCert(object):
                 break
             # Otherwise, open up a new polytope and explore
             else:
-                if pop_el.lp_dist < prev_min_dist - 1e5:
-                    print("-" * 20 + "WHAT IS GOING WRONG?????" + '-' * 20)
                 prev_min_dist = pop_el.lp_dist
                 self._verbose_print('---Opening New Polytope---')
                 self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
@@ -396,8 +489,9 @@ class IncrementalGeoCert(object):
                 if configs_flat not in self.seen_to_polytope_map:
                     new_poly_dict = self.net.compute_polytope_config(configs,
                                                                      False)
-                    new_poly = Polytope.from_polytope_dict(new_poly_dict, 
-                                              domain_bounds=self.domain_bounds)
+                    new_poly = Polytope.from_polytope_dict(new_poly_dict,
+                                              domain_bounds=self.domain_bounds,
+                                         dead_constraints=self.dead_constraints)
                     self._update_step(new_poly, pop_el)
                 else:
                     self._verbose_print("We've already seen that polytope")
@@ -410,8 +504,8 @@ class IncrementalGeoCert(object):
         self._verbose_print("DIST: ", pop_el.lp_dist)
         if self.display:
             self.plot_2d(pop_el.lp_dist, iter=index)
-        adver_examp = pop_el.projection
-        return pop_el.lp_dist, cw_bound, cw_example, adver_examp, pop_el
+        best_example = pop_el.projection
+        return pop_el.lp_dist, adv_bound, adv_ex, best_example, pop_el
 
 
 
