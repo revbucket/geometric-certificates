@@ -1,0 +1,8 @@
+
+-----------------
+Exp_1:
+-----------------
+
+-number of facets of polytopes of random ReLu nets seems to converge to a 
+maximum number of facets as network width scales (or number of facets grows really slowly after some point)
+-above found for two layer ReLu net

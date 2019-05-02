@@ -643,7 +643,7 @@ class Polytope(object):
 
     def get_volume(self, method):
         if method == 'MC_1':
-
+            pass 
         else:
             raise NotImplementedError
 

@@ -394,6 +394,17 @@ def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
 
+def plot_2d_lines(A, b, xlim, ax=plt.axes(), color='black'):
+    ''' Plots lines in 2 dimensions as defined by <a_i, x> - b_i for all i.
+        A = [a_1; a_2; ....; a_n]
+    '''
+    x = np.linspace(xlim[0], xlim[1], 2)
+    for a_vector, b_i in zip(A, b):
+        c = -a_vector[0]/a_vector[1]
+        d = b_i/a_vector[1]
+
+        y = c*x + d
+        ax.plot(x, y, color=color)
 
 def get_spaced_colors(n):
     """Given number, n, returns n colors which are visually well distributed

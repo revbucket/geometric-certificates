@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 # ##########################################################################
 
 # Experiment to investigate the distribution of volume of polytopes for
-# example where sampled polytopes have all constraints as essential
+# example where sampled polytopes have large percentage of constraints as non-redundant
 
 # ===============================================
 # Find polytopes using Geocert
