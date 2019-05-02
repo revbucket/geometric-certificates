@@ -330,56 +330,6 @@ def MVIE_ellipse(A, b):
         return C, d
 
 
-def project_plus_ray(samples, ptope, ax=plt.axes()):
-    ''' Computes l2 projection onto all hyperplanes defined from each inequality constraint of ptope.
-        If projection is_feasible, then constraint is non-redundant. Otherwise, implement ray-shoot
-        to find a non-redundant constraint.
-
-        Args:   samples => a list of points for which process is conducted
-                ptope   => a polytope
-
-        Modifies:   ptope.redundant
-
-        Returns:    list of list of projections from each sample'''
-
-    print('number of samples:', len(samples))
-    potent_faces = ptope.get_potent_facets()
-    boundary_pt_groups = []
-
-    for sample in samples:
-        boundary_pts = []
-        hyp_projections = []
-        for face in potent_faces:
-            projection = face.get_hyperplane_proj_l2(sample)
-            hyp_projections.append(projection)
-            is_feasible, constr_bools = ptope.is_point_fesible_plus(projection)
-
-            if is_feasible:
-                # if hyperplane projection is inside the polytope, then face is non-redundant
-                ptope.redundant[face.tight_list[0]] = False
-                boundary_pts.append(projection)
-            else:
-                # ray-shoot in direction (projection-sample) to find a non-redundant constraint
-                ray_projection = ray_shoot(sample, projection-sample, ptope, potent_faces, ~np.asarray(constr_bools))
-                boundary_pts.append(ray_projection)
-
-        hyp_projections = np.asarray(hyp_projections)
-        boundary_pts = np.asarray(boundary_pts)
-
-        # # # TEMP PLOTING
-        # plot_polytopes_2d([ptope, ], ax=ax)
-        # plt.xlim([-2,2])
-        # plt.ylim([-2,2])
-        # plot_hyperplanes(ptope.ub_A, ptope.ub_b, ax=ax)
-        # ax.scatter(sample[0], sample[1], marker='*', linewidths=4)
-        # ax.scatter(hyp_projections[:, 0], hyp_projections[:, 1], linewidths=1)
-        # ax.scatter(boundary_pts[:, 0], boundary_pts[:, 1], marker='*', linewidths=2)
-        # for pt in hyp_projections:
-        #     ax.plot([pt[0], sample[0]], [pt[1], sample[1]])
-
-        boundary_pt_groups.append(boundary_pts)
-    # plt.show()
-    return boundary_pt_groups
 
 def ray_shoot(x_0, d, ptope, facets, facet_bools=None):
     ''' Given a list of facets, an initial point 'x_0', and direction 'd', method finds the first

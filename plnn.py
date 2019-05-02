@@ -82,7 +82,7 @@ class PLNN(nn.Module):
             return configs
 
     def make_adversarial_constraints(self, configs, true_label,
-                                     domain_bounds=None):
+                                     domain):
         """ Given a config computes the linear map in terms of this config
             for all neurons INCLUDING the output neurons (logits) and generates
             the polytope constraints for the neuron config and
@@ -123,7 +123,7 @@ class PLNN(nn.Module):
             new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
                              np.hstack((poly_b, constraint_b_to_add)),
                              [num_constraints], config=flat_config,
-                             domain_bounds=domain_bounds)
+                             domain=domain)
             new_facet.check_feasible()
             if new_facet.is_feasible:
                 facets.append(new_facet)
@@ -205,11 +205,11 @@ class PLNN(nn.Module):
         return self.fcs[-1](x) # No ReLu on the last one
 
 
-    def compute_interval_bounds(self, box):
+    def compute_interval_bounds(self, domain_obj):
         """ For each neuron computes a bound for the range of values each
             pre-ReLU can take.
         ARGS:
-            box : Tensor, of dimension shape (n, 2) for box constraints
+            domain_obj : Domain - object used to hold bounding boxes
         RETURNS:
             returned_bounds : list of tensors giving pre-Relu bounds
             uncertain_set: list of tensors with 1 if uncertain about this
@@ -217,6 +217,8 @@ class PLNN(nn.Module):
             list of length (# fully connected layers - 1), where each element
             is a tensor of shape (num_neurons, 2) for the bounds for the preReLU
         """
+
+        box = domain_obj.box_to_tensor()
         # setup + asserts
         assert all(box[0] <= box[1])
 

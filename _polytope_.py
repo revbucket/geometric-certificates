@@ -12,29 +12,27 @@ import joblib
 
 import time
 
-#########################################################################
-#                                                                       #
-#               algorithm helpers                                       #
-#                                                                       #
-#########################################################################
 
-
-
-##########################################################################
-#                                                                        #
-#                   POLYTOPE AND FACE CLASSES                            #
-#                                                                        #
-##########################################################################
-
+################################################################################
+#                                                                              #
+#                           POLYTOPE CLASS                                     #
+#                                                                              #
+################################################################################
 
 
 class Polytope(object):
+
+
+    ######################################################################
+    #                                                                    #
+    #                       Polytope Initializations                     #
+    #                                                                    #
+    ######################################################################
+
     def __init__(self, ub_A, ub_b, config=None, interior_point=None,
-                 domain_bounds=None, _domain_structure=None,
-                 dead_constraints=None):
+                 domain=None, dead_constraints=None):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
-
         if isinstance(ub_A, torch.Tensor):
             ub_A = ub_A.cpu().detach().numpy().astype(np.double)
         if isinstance(ub_b, torch.Tensor):
@@ -43,236 +41,33 @@ class Polytope(object):
         self.ub_b = utils.as_numpy(ub_b).squeeze().astype(np.double)
         self.config = config
         self.interior_point = interior_point
-
-        # Domain constraints:
-        # Either have no domain constraints))
-        # -- xor --
-        # domain constraints cooked into ub_A already or not
-        assert (domain_bounds == None) or (_domain_structure == None)
-        num_constraints = self.ub_A.shape[0]
-        low_bounds, hi_bounds = None, None
-        # If need to cook in domain constraints into ub_A, then do so
-        if domain_bounds is not None:
-            domain_a, domain_b, low_bounds, hi_bounds = \
-                                       self.convert_domain_bounds(domain_bounds,
-                                                             self.ub_A.shape[1])
-            self.ub_A = np.vstack((self.ub_A, domain_a))
-            self.ub_b = np.hstack((self.ub_b, domain_b))
-
-        # If domain constraints not provided, build them and set them
-        if _domain_structure is None:
-            _domain_structure = {'num_constraints': num_constraints,
-                                 'domain_bounds': domain_bounds,
-                                 'low_bounds': low_bounds,
-                                 'hi_bounds': hi_bounds
-                                 }
-        self._domain_structure = _domain_structure
-
-        # Set dead constraints if specified
+        self.domain = domain # is a domain object now
         self.dead_constraints = dead_constraints
 
 
     @classmethod
-    def from_polytope_dict(cls, polytope_dict, domain_bounds=None,
+    def from_polytope_dict(cls, polytope_dict, domain=None,
                            dead_constraints=None):
         """ Alternate constructor of Polytope object """
         return cls(polytope_dict['poly_a'],
                    polytope_dict['poly_b'],
                    config=polytope_dict['configs'],
-                   domain_bounds=domain_bounds,
+                   domain=domain,
                    dead_constraints=dead_constraints)
 
 
-    @classmethod
-    def convert_domain_bounds(cls, domain_bounds, n):
-        """ Given domain bounds, which can take 3 forms, converts them into
-            a constraint matrix and vector pair (A,b) such that the domain is
-            {x | Ax <= b}
-        ARGS:
-            domain_bounds: None, [(lo, hi)], [(lo_1, hi_1), ..., (lo_n, hi_n)]
-                - If None, no domain bounds
-                - If a singleton list, has that bound for all dimensionss
-                - If length n list, has custom bounds for every set
-            n: int - dimension of polytope
-        RETURNS:
-            (None, None, None, None) or (A (array[2n][n]), b (array[2n]),
-                                         low_bounds (Array[n]),
-                                         high_bounds (Array[n]))
-        """
-        if domain_bounds is None:
-            return (None, None)
-        else:
-            A_upper = np.eye(n)
-            A_lower = -1 * np.eye(n)
-            assert isinstance(domain_bounds, list)
-            if len(domain_bounds) == 1:
-                domain_low, domain_high = domain_bounds[0]
-                b_lower = -1 * domain_low * np.ones(n)
-                b_upper = domain_high * np.ones(n)
-                low_bounds = domain_low * np.ones(n)
-                hi_bounds = domain_high * np.ones(n)
-            else:
-                b_lower = -1 * np.array([_[0] for _ in domain_bounds])
-                b_upper = np.array([_[1] for _ in domain_bounds])
-                low_bounds, hi_bounds = [np.array(_)
-                                         for _ in zip(*domain_bounds)]
 
-
-            domain_a = np.vstack((A_upper, A_lower))
-            domain_b = np.hstack((b_upper, b_lower))
-
-            return (domain_a, domain_b, low_bounds, hi_bounds)
-
-
-    def _is_dead(self, i):
-        """ Just a quick check for deadness of a constraint. We don't need
-            to build faces for neurons that we know to be fixed to be on or off
-        ARGS:
-            i : int - constraint index
-        RETURNS:
-            False if no known dead constraints or we're not sure about this
-            constraint. True o.w.
-        """
-        return (self.dead_constraints[0] is not None and
-                self.dead_constraints[0][i])
-
-
-    def feasible_within_domain(self):
-        """ Returns a list of indices i, where A_upper(i)^T x = b_upper(i) is
-            feasible within the domain.
-
-            For box-constrained domains, this can be done with 4 MM's
-            A constraint a^Tx = b is feasible within domains of [lo, hi] if
-            a_+^T hi + a_-^T lo >= b  (max possible in domain is >= b)
-            ~and ~
-            a_-^T hi + a_-^T hi <= b  (min possible in domain is <= b)
-        """
-        domain_bounds = self._domain_structure['domain_bounds']
-        num_constraints = self._domain_structure['num_constraints']
-        low_bounds = self._domain_structure['low_bounds']
-        hi_bounds = self._domain_structure['hi_bounds']
-
-        if domain_bounds is None: # handle case with no domains
-            return list(range(self.ub_A.shape[0]))
-
-        domain_free_a = self.ub_A[:num_constraints, :]
-        b = self.ub_b[:num_constraints]
-        a_plus = np.maximum(domain_free_a, 0, domain_free_a.copy())
-        a_minus = np.minimum(domain_free_a, 0, domain_free_a.copy())
-
-
-        upper_check = (a_plus.dot(hi_bounds) + a_minus.dot(low_bounds)) >= b
-        lower_check = (a_plus.dot(low_bounds) + a_minus.dot(hi_bounds)) <= b
-        total_check = upper_check + lower_check
-
-        return [i for i in range(len(total_check)) if total_check[i]]
-
-    def minimal_projections(self, potential_facets, upper_bound_dict):
-        """ Returns a list of indices i where the minimal projection is less
-            than the upper bound dict
-        ARGS:
-            potential_facets: int[] - list of indices of potential facets
-            upper_bound_dict: dict - has keys [upper_bound, lp_norm, x]
-        RETURNS:
-            list of indices which have minimal projection (according to lp norm)
-            that is less than the upper bound
-        """
-        potential_facet_map = {i: el for i, el in enumerate(potential_facets)}
-        dual_norm = {'l_2': None, 'l_inf': 1}[upper_bound_dict['lp_norm']]
-        upper_bound = upper_bound_dict['upper_bound'][0] # reference dynamic obj
-        x = upper_bound_dict['x'].squeeze()
-
-        A, b = self.ub_A[potential_facets, :], self.ub_b[potential_facets]
-        duals = np.linalg.norm(A, ord=dual_norm, axis=1)
-
-        under_upper_bound = np.divide(b - A.dot(x), duals) <= upper_bound
-        return [potential_facet_map[i]
-                for i, el in enumerate(under_upper_bound) if el]
-
-
-    ##########################################################################
-    #       GENERATES FACETS FOR USE IN GEOCERT ALGORITHM                    #
-    ##########################################################################
-    """ The following methods all are variations on a theme where the function
-        aims to output a list of Faces of this polytope (represented as Face
-        objects) which can be checked for the following:
-        (i)    - feasibility: Facets need to have a feasible region
-        (ii)   - (n-1) dimension : Facets need to be FACES and not lower dim
-        (iii)  - boundedness : If an upper bound is supplied, the facet needs to
-                               have minimal projection closer than this upper
-                               bound
-        (iV)   - novelty : If a record of previously seen faces was supplied,
-                           the output faces can't be in that record
-    """
-
-    def facet_feasibility_check(self, tight_idx, facet=None):
-        if facet is None:
-            facet = Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
-                         _domain_structure=self._domain_structure,
-                         dead_constraints=self.dead_constraints)
-
-        facet.check_facet_feasible()
-        if not facet.is_feasible:
-            return (False, 'infeasible')
-
-        if not facet.is_facet:
-            return (False, 'not-facet')
-
-        return (True, facet)
-
-
-    def handle_single_facet(self, tight_idx, upper_bound_dict, facet=None):
-        """ Function that takes a polytope description and a tight index and
-            checks if this is rejectable or feasible and a facet.
-
-            If the output[0] of this is True, then facet is feasible and dim (n-1)
-        """
-        if facet is None:
-            facet = Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
-                         _domain_structure=self._domain_structure,
-                         dead_constraints=self.dead_constraints)
-
-        #print("PID: ", os.getpid(), " TIGHT LIST:", tight_idx)
-        if upper_bound_dict is not None:
-            reject_status, reason = facet.reject_via_upper_bound(upper_bound_dict)
-            if reject_status:
-                return (False, reason)
-
-        facet.check_feasible()
-        if not facet.is_feasible:
-            return (False, 'infeasible')
-
-        facet.check_facet()
-        if not facet.is_facet:
-            return (False, 'not-facet')
-
-        return (True, facet)
-
-
-    def scrub_seen_facets(self, facet_list, seen_dict, net):
-
-        assert all(facet.is_facet and facet.is_feasible for facet in facet_list)
-
-        output_facets = []
-        num_seen = 0
-        # remove all domain bounded facets first
-        facet_list = [_ for _ in facet_list if _.facet_type != 'domain']
-        for facet in facet_list:
-            new_configs = utils.flatten_config(facet.get_new_configs(net))
-            if new_configs in seen_dict:
-                num_seen += 1
-            else:
-                output_facets.append(facet)
-
-        return output_facets, num_seen
-
-
-
+    ######################################################################
+    #                                                                    #
+    #                   FACET GENERATION TECHNIQUES                      #
+    #                                                                    #
+    ######################################################################
     def generate_facets_naive(self, check_feasible=False):
         """ Generates all (n-1) dimensional facets of polytope
 
-        IMPLEMENTATION NOTES: Most naive implementation, very slow, not useful
-                              in practice. Useful in Batch implementation though
+        NOTES: Most naive implementation, and uses no heuristics.
+               Doesn't care about domain, is very slow, and not useful for
+               verifying nets. Useful in Batch implementation though
         """
         num_constraints = self.ub_A.shape[0]
         facets = []
@@ -293,12 +88,14 @@ class Polytope(object):
 
 
 
-    def generate_facets_configs_parallel2(self, seen_dict, net,
-                                          upper_bound_dict=None,
-                                          num_jobs=8):
+    def generate_facets_configs_parallel(self, seen_dict, net,
+                                         num_jobs=8):
         """ Does Facet checking in parallel using joblib to farm out multiple
             jobs to various processes (possibly on differing processors)
-        IMPLEMENTATION NOTES:
+        NOTES:
+            Main technique using all the heuristics that don't solve any LPs and
+            then farms out the things that need LP's to be done in parallel.
+
             Uses joblib to farm out checking of feasibility, facet-ness,
             boundedness and then does the novelty check in-serial
 
@@ -316,10 +113,11 @@ class Polytope(object):
         ######################################################################
         #   First set things up                                              #
         ######################################################################
-        num_facets = self._domain_structure['num_constraints']
+        num_facets = self.ub_A.shape[0]
         potential_facets = [_ for _ in range(num_facets)]
         reject_dict = defaultdict(int)
-        domain_feasible = set(self.feasible_within_domain())
+
+        domain_feasible = self.domain.feasible_facets(self.ub_A, self.ub_b)
 
 
         ######################################################################
@@ -339,16 +137,16 @@ class Polytope(object):
         ######################################################################
         #   Step 3: Remove facets that aren't feasible within upper bound    #
         ######################################################################
-        if upper_bound_dict is not None:
-            new_potential_facets = []
-            upper_bound_proj = set(self.minimal_projections(potential_facets,
-                                                            upper_bound_dict))
-            for idx in potential_facets:
-                if idx not in upper_bound_proj:
-                    reject_dict['upper_bound'] += 1
-                else:
-                    new_potential_facets.append(idx)
-            potential_facets = new_potential_facets
+        upper_bound_proj = self.domain.minimal_facet_projections(self.ub_A,
+                                                                 self.ub_b)
+        new_potential_facets = []
+        for idx in potential_facets:
+            if idx not in upper_bound_proj:
+                reject_dict['upper_bound'] += 1
+            else:
+                new_potential_facets.append(idx)
+        potential_facets = new_potential_facets
+
 
         ######################################################################
         #   Step 4: Farm out remaining facets for feasibility/IP checks      #
@@ -383,47 +181,7 @@ class Polytope(object):
         return facets, dict(reject_dict)
 
 
-    def generate_facets_configs_parallel(self, seen_dict, net,
-                                         upper_bound_dict=None,
-                                         num_jobs=8):
 
-        """ Does Facet checking in parallel using joblib to farm out multiple
-            jobs to various processes (possibly on differing processors)
-        IMPLEMENTATION NOTES:
-            Uses joblib to farm out checking of feasibility, facet-ness,
-            boundedness and then does the novelty check in-serial
-        """
-        ##################################################################
-        #   Set up pool and offload all the work, and then merge results #
-        ##################################################################
-        num_facets = self._domain_structure['num_constraints']
-        reject_dict = {}
-        maplist = []
-
-        for i in range(num_facets):
-            if self._is_dead(i):
-                reject_dict['dead_cons'] = reject_dict.get('dead_cons', 0) + 1
-                continue
-            maplist.append((i, upper_bound_dict))
-
-
-        # handle_single_facet checks boundedness, feasibility, dimensionality
-        map_fxn = joblib.delayed(utils.star_arg(self.handle_single_facet))
-        outputs = joblib.Parallel(n_jobs=num_jobs)(map_fxn(_) for _ in maplist)
-
-
-        surviving_facets = []
-        for is_okay, output in outputs:
-            if not is_okay: # if already rejected, record why
-                reject_dict[output] = reject_dict.get(output, 0) + 1
-            else:
-                surviving_facets.append(output)
-
-        facets, num_seen = self.scrub_seen_facets(surviving_facets, seen_dict,
-                                                  net)
-        if num_seen > 0:
-            reject_dict['seen before'] = num_seen
-        return facets, reject_dict
 
     def generate_facets_configs(self, seen_dict, net, upper_bound_dict=None,
                                 use_clarkson=True, use_ellipse=False):
@@ -541,10 +299,63 @@ class Polytope(object):
         return facets, reject_reasons
 
 
+    ##########################################################################
+    #                                                                        #
+    #                            HELPER METHODS                              #
+    #                                                                        #
+    ##########################################################################
+
+    def _is_dead(self, i):
+        """ Just a quick check for deadness of a constraint. We don't need
+            to build faces for neurons that we know to be fixed to be on or off
+        ARGS:
+            i : int - constraint index
+        RETURNS:
+            False if no known dead constraints or we're not sure about this
+            constraint. True o.w.
+        """
+        return (self.dead_constraints is not None and
+                self.dead_constraints[i])
+
+
+    def facet_feasibility_check(self, tight_idx, facet=None):
+        """ Checks if a particular facet (with specified tight_idx) is feasible
+        """
+        if facet is None:
+            facet = Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
+                         domain=self.domain,
+                         dead_constraints=self.dead_constraints)
+
+        facet.check_facet_feasible()
+        if not facet.is_feasible:
+            return (False, 'infeasible')
+
+        if not facet.is_facet:
+            return (False, 'not-facet')
+
+        return (True, facet)
+
+
+    def scrub_seen_facets(self, facet_list, seen_dict, net):
+        """ Removes facets that we've seen before """
+
+        assert all(facet.is_facet and facet.is_feasible for facet in facet_list)
+        output_facets = []
+        num_seen = 0
+        # remove all domain bounded facets first
+        for facet in facet_list:
+            new_configs = utils.flatten_config(facet.get_new_configs(net))
+            if new_configs in seen_dict:
+                num_seen += 1
+            else:
+                output_facets.append(facet)
+
+        return output_facets, num_seen
+
 
     ##########################################################################
     #                                                                        #
-    #                       POLYTOPE HELPER METHODS                          #
+    #                           JUNK METHODS???                              #
     #                                                                        #
     ##########################################################################
 
@@ -993,11 +804,8 @@ class Polytope(object):
 
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None,
-                 removal_list=None, domain_bounds=None, _domain_structure=None,
-                 dead_constraints=None):
-        super(Face, self).__init__(poly_a, poly_b, config=config,
-                                   domain_bounds=domain_bounds,
-                                   _domain_structure=_domain_structure,
+                 domain=None, dead_constraints=None, removal_list=None):
+        super(Face, self).__init__(poly_a, poly_b, config=config, domain=domain,
                                    dead_constraints=dead_constraints)
         self.a_eq = self.ub_A[tight_list]
         self.b_eq = self.ub_b[tight_list]
@@ -1007,13 +815,6 @@ class Face(Polytope):
         self.interior = None
         self.removal_list = removal_list
 
-        # Set facet type
-        assert self._domain_structure is not None
-        num_constraints = self._domain_structure['num_constraints']
-        if any(tight_el >= num_constraints for tight_el in tight_list):
-            self.facet_type = 'domain'
-        else:
-            self.facet_type = 'facet'
 
 
     def check_feasible(self):
@@ -1046,35 +847,59 @@ class Face(Polytope):
             Returns (False, 'not-facet') if no interior point
             Returns (True, None) otherwise
         """
+        ######################################################################
+        #   If already computed, just return that result                     #
+        ######################################################################
 
-        # If already computed, return that
         if (self.is_feasible is not None and
             self.is_feasible and
             self.is_facet is not None and
             self.is_facet):
             return True
 
-        # If not already computed, compute an interior point
+        ######################################################################
+        #   If not already computed, find an interior point using an LP      #
+        ######################################################################
 
         # maximize t
         # st Ax + t <= b
-        #         t >  0
+        #         t >= 0
+        A = self.ub_A
+        b = self.ub_b
 
-        m, n = self.ub_A.shape
-        c = np.zeros(n + 1)
+        # If box constraints over domain, add these domain constraints
+        if self.domain.box_low is not None:
+            assert len(self.tight_list) == 1
+            tight_idx = self.tight_list[0]
+            d_A, d_b = self.domain.box_constraints()
+
+            #d_A, d_b = self.domain.nonredundant_box_constraints(self.ub_A,
+            #                                                    self.ub_b,
+            #                                                    tight_idx)
+            # Append domain constraints
+            A = np.vstack((A, d_A))
+            b = np.hstack((b, d_b))
+
+
+        # Add variable t
+        A = np.vstack((A, np.zeros(A.shape[1]))) # stack 0 row onto A
+        b = np.hstack((b, np.zeros(1)))
+
+        # Modify contraints such that Ax + t <= b
+        # except for the tight constraint
+        # (also add t >= 0)
+        A = np.hstack((A, np.ones((A.shape[0], 1))))
+        A[self.tight_list, -1] = 0 # tight constraint has no t
+        A[-1][-1] = -1 # t >= 0
+
+        a_eq = A[self.tight_list]
+
+        # Build constraint set
+        c = np.zeros(A.shape[1])
         c[-1] = -1
 
-        ub_A = np.vstack((self.ub_A, np.zeros(n))) # stack 0 row onto A
-        ub_A = np.hstack((ub_A, np.ones((m + 1, 1))))
-        ub_A[-1][-1] = -1
-        ub_A[self.tight_list, -1] = 0
-
-        ub_b = np.hstack((self.ub_b, np.zeros(1)))
-        a_eq = np.hstack((self.a_eq, np.zeros((1,1))))
-
-        linprog_result = solvers.lp(matrix(c), matrix(ub_A),
-                            matrix(ub_b), A=matrix(a_eq),
-                            b=matrix(self.b_eq), solver='glpk')
+        linprog_result = solvers.lp(matrix(c), matrix(A), matrix(b),
+                            A=matrix(a_eq), b=matrix(self.b_eq), solver='glpk')
         if linprog_result['status'] == 'optimal':
             self.is_feasible = True
             if linprog_result['primal objective'] < 0:
@@ -1086,73 +911,136 @@ class Face(Polytope):
         return self.is_facet
 
 
+    def get_new_configs(self, net):
+        ''' Function takes original ReLu configs and flips the activation of
+            the ReLu at index specified in 'tight_boolean_configs'.
+        '''
 
-    def check_facet(self):
-        """ Checks if this polytope is a (n-1) face and stores the result"""
+        # New and improved version:
+        # Looks at the tight list, maps the tight index to the 2d
+        # coordinate in the config and flips the index_map
+        assert self.interior is not None
 
-        # if already computed, return that
-        if self.is_facet is not None:
-            return self.is_facet
+        orig_configs = self.config
+        tight_idx = self.tight_list[0]
+        flip_i, flip_j = utils.index_to_config_coord(orig_configs, tight_idx)
+        new_configs = copy.deepcopy(orig_configs)
+        new_configs[flip_i][flip_j] = int(1 - new_configs[flip_i][flip_j])
 
-        # if not feasible, then return False
-        if self.is_feasible is not None and not self.is_feasible:
-            self.is_facet = False
-            return self.is_facet
+        return new_configs
 
-        m, n = self.ub_A.shape
-        # Dimension check of (n-1) facet
-        # Do min 0
-        # st. Ax + t <= b
-        #          t  > 0
-        # and if is_feasible, then good
-        c = np.zeros(n + 1)
-        # c[-1] = -1
 
-        # SPEED UP WITH REMOVAL LIST!
-        if self.removal_list is not None:
-            map_idx = sum(~self.removal_list[:self.tight_list[0]])
-            saved_row = self.ub_A[self.tight_list[0]]
+    def linf_dist(self, x):
+        #TODO: this method doesn't  seem to always correctly find the projection onto a facet
 
-            new_poly_a = self.ub_A[~self.removal_list]
-            new_poly_a = np.vstack((new_poly_a, np.zeros((1, new_poly_a.shape[1]))))
-            new_poly_a = np.hstack((new_poly_a, np.ones((new_poly_a.shape[0], 1))))
-            new_poly_a[-1][-1] = -1
-            new_poly_a[map_idx, -1] = 0     # remove affect of t on tight constraints
+        """ Returns the l_inf distance to point x using LP
+            as well as the optimal value of the program"""
 
-            new_poly_b = self.ub_b[~self.removal_list]
-            new_poly_b = np.hstack((new_poly_b, 0))
+        # set up the linear program
+        # min_{t,v} t
+        # s.t.
+        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
+        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
+        # 3)  v <= t * 1           (<==>)    v_i - t <= 0
+        # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
+        # 5)  x + v in domain      (<==>)
+
+        n = np.shape(self.ub_A)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
+        # optimization variable is [t, v]
+        m = self.ub_A.shape[0]
+        c = np.zeros(n+1)
+        c[0] = 1
+
+        a_constraints = []
+        b_constraints = []
+
+        # Constraint 1
+        a_constraints.append(np.hstack((np.zeros((m, 1)), self.ub_A)))
+        b_constraints.append(self.ub_b - np.matmul(self.ub_A, x)[:, 0])
+
+        # Constraint 2
+        eq_a = a_constraints[0][self.tight_list, :]
+        eq_b = (self.ub_b[self.tight_list] -
+                np.matmul(self.ub_A[self.tight_list, :], x))
+
+
+        # Constraint 3
+        a_constraints.append(np.hstack((-1*np.ones((n, 1)), np.identity(n))))
+        b_constraints.append(np.zeros(n))
+
+        # Constraint 4
+        a_constraints.append(np.hstack((-1*np.ones((n, 1)), -1*np.identity(n))))
+        b_constraints.append(np.zeros(n))
+
+        # Constraint 5
+        d_a, d_b = self.domain.box_constraints()
+        if d_a is not None:
+            d_a_rows = d_a.shape[0]
+            a_constraints.append(np.hstack([np.zeros((d_a_rows, 1)), d_a]))
+            b_constraints.append(d_b - np.tile(x.squeeze(), 2))
+
+
+        ub_a = np.vstack(a_constraints)
+        ub_b = np.hstack(b_constraints)
+
+
+
+        # Solve linprog
+
+        cvxopt_out = solvers.lp(matrix(c), matrix(ub_a), matrix(ub_b),
+                               A=matrix(eq_a), b=matrix(eq_b),
+                               solver='glpk')
+        if cvxopt_out['status'] == 'optimal':
+            return cvxopt_out['primal objective'], \
+                   (x + np.array(cvxopt_out['x'])[1:])
         else:
-            new_poly_a = np.ones([m, n+1])
-            new_poly_a[:, :-1] = self.ub_A
-            new_poly_a[self.tight_list, -1] = 0
-            new_poly_b = self.ub_b
-        #------
+            print("About to fail...")
+            print("CVXOPT status", cvxopt_out['status'])
+
+            print("INTERIOR IS ", self.interior)
+            raise Exception("LINF DIST FAILED?")
 
 
+    def l2_dist(self, x):
+        """ Returns the l_2 distance to point x using LP
+            as well as the optimal value of the program"""
 
-        bounds = [(None, None) for _ in range(n)] + [(1e-11, None)]
-        lower_bound_a = np.zeros(n + 1)
-        lower_bound_a[-1] = -1
-        lower_bound_b = 1e-7
-        new_poly_a = np.vstack((new_poly_a, lower_bound_a))
-        new_poly_b = np.hstack((new_poly_b, lower_bound_b))
-        # Map indices real quick:
-        m2, n2 = self.a_eq.shape
-        a_eq_new = np.zeros([m2, n+1])
-        a_eq_new[:, :-1] = self.a_eq
+        n = self._domain_structure['num_constraints']
+        x = utils.as_numpy(x).reshape(n, -1)
+
+        # set up the quadratic program
+        # min_{v} v^T*v
+        # s.t.
+        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
+        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
 
 
-        # Setup and solve the linear program using scipy
-        linprog_result = solvers.lp(matrix(c), matrix(new_poly_a),
-                                    matrix(new_poly_b),
-                                    A=matrix(a_eq_new), b=matrix(self.b_eq),
-                                    solver='glpk')
-        if linprog_result['status'] == 'optimal':
-            self.is_facet = True
-            self.interior = np.array(linprog_result['x'][0:-1])
+        n = np.shape(self.ub_A)[1]
+        x = utils.as_numpy(x).reshape(n, -1)
+
+        P = matrix(np.identity(n))
+        G = matrix(self.ub_A)
+        h = matrix(self.ub_b - np.matmul(self.ub_A, x)[:, 0])
+        q = matrix(np.zeros([n, 1]))
+        A = matrix(self.a_eq)
+        b = matrix(self.b_eq - np.matmul(self.a_eq, x))
+
+        quad_program_result = solvers.qp(P, q, G, h, A, b)
+
+        if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
+            v = np.array(quad_program_result['x'])
+            return np.linalg.norm(v), x + v.reshape(n,-1)
         else:
-            print("WHAT??? ", linprog_result['status'])
-        return self.is_facet
+            raise Exception("QPPROG FAILED: " + quad_program_result['status'])
+
+
+    ##########################################################################
+    #                                                                        #
+    #               METHODS FOR BATCH VERSION ONLY                           #
+    #                                                                        #
+    ##########################################################################
 
 
     def _same_hyperplane(self, other):
@@ -1160,7 +1048,7 @@ class Face(Polytope):
             Returns True if they lie in the same hyperplane
         """
         # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
+        if not (self.check_facet_feasible() and other.check_facet_feasible()):
             return False
         # if they lie in different hyperplanes, then return False
         self_tight = self.tight_list[0]
@@ -1179,7 +1067,7 @@ class Face(Polytope):
             Returns True if they are the same
         """
         # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
+        if not (self.check_facet_feasible() and other.check_facet_feasible()):
             return False
 
         # if they lie in different hyperplanes, then return False
@@ -1200,7 +1088,7 @@ class Face(Polytope):
             Uses LP to check if intersection of facets is (n-1) dimensional.
         """
         # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
+        if not (self.check_facet_feasible() and other.check_facet_feasible()):
             return False
 
         if not self._same_hyperplane(other):
@@ -1213,7 +1101,7 @@ class Face(Polytope):
         new_face = Face(np.vstack((self.ub_A, other.ub_A)),
                         np.hstack((self.ub_b, other.ub_b)),
                         tight_list=np.hstack((self.tight_list, new_tight_list)))
-        return new_face.check_facet()
+        return new_face.check_facet_feasible()
 
 
     def check_same_facet_pg_slow(self, other):
@@ -1225,7 +1113,7 @@ class Face(Polytope):
         """
 
         # if either is not a facet, then return False
-        if not (self.check_facet() and other.check_facet()):
+        if not (self.check_facet_feasible() and other.check_facet_feasible()):
             return False
 
         if not self._same_hyperplane(other):
@@ -1280,7 +1168,7 @@ class Face(Polytope):
             hamming distance one and yet their intersection is not a (n-1)
             dim. face.
         """
-        if not (self.check_facet() and other.check_facet()):
+        if not (self.is_facet is True) and (other.is_facet is True):
             return False
 
         if not self._same_hyperplane(other):
@@ -1294,192 +1182,4 @@ class Face(Polytope):
 
         return ReLu_distance_check and not self._same_tight_constraint(other)
 
-    def get_new_configs(self, net):
-        ''' Function takes original ReLu configs and flips the activation of
-            the ReLu at index specified in 'tight_boolean_configs'.
-        '''
 
-        # New and improved version:
-        # Looks at the tight list, maps the tight index to the 2d
-        # coordinate in the config and flips the index_map
-        assert self.interior is not None
-
-        orig_configs = self.config
-        tight_idx = self.tight_list[0]
-        flip_i, flip_j = utils.index_to_config_coord(orig_configs, tight_idx)
-        new_configs = copy.deepcopy(orig_configs)
-        new_configs[flip_i][flip_j] = int(1 - new_configs[flip_i][flip_j])
-
-        return new_configs
-
-
-
-    def linf_dist(self, x):
-        #TODO: this method doesn't  seem to always correctly find the projection onto a facet
-
-        """ Returns the l_inf distance to point x using LP
-            as well as the optimal value of the program"""
-
-        # set up the linear program
-        # min_{t,v} t
-        # s.t.
-        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
-        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
-        # 3)  v <= t * 1           (<==>)    v_i - t <= 0
-        # 4) -v <= t * 1           (<==>)   -v_i - t <= 0
-
-        n = np.shape(self.ub_A)[1]
-        x = utils.as_numpy(x).reshape(n, -1)
-
-        # optimization variable is [t, v]
-        m = self.ub_A.shape[0]
-        c = np.zeros(n+1)
-        c[0] = 1
-
-        # Constraint 1
-        constraint_1a = np.hstack((np.zeros((m, 1)), self.ub_A))
-        constraint_1b = self.ub_b - np.matmul(self.ub_A, x)[:, 0]
-
-        # Constraint 2
-        constraint_2a = constraint_1a[self.tight_list, :]
-        constraint_2b = self.ub_b[self.tight_list] - np.matmul(self.ub_A[self.tight_list, :], x)
-
-
-        # Constraint 3
-        constraint_3a = np.hstack((-1*np.ones((n, 1)), np.identity(n)))
-        constraint_3b = np.zeros(n)
-
-        # Constraint 4
-        constraint_4a = np.hstack((-1*np.ones((n, 1)), -1*np.identity(n)))
-        constraint_4b = np.zeros(n)
-
-        ub_a = np.vstack((constraint_1a, constraint_3a, constraint_4a))
-        ub_b = np.hstack((constraint_1b, constraint_3b, constraint_4b))
-
-
-        bounds = [(0, None)] + [(None, None) for _ in range(len(x))]
-
-        # Solve linprog
-
-        cvxopt_out = solvers.lp(matrix(c), matrix(ub_a), matrix(ub_b),
-                               A=matrix(constraint_2a), b=matrix(constraint_2b),
-                               solver='glpk')
-        if cvxopt_out['status'] == 'optimal':
-            return cvxopt_out['primal objective'], \
-                   (x + np.array(cvxopt_out['x'])[1:])
-        else:
-            print("About to fail...")
-            print("CVXOPT status", cvxopt_out['status'])
-            raise Exception("LINF DIST FAILED?")
-
-
-    def l2_dist(self, x):
-        """ Returns the l_2 distance to point x using LP
-            as well as the optimal value of the program"""
-
-        n = self._domain_structure['num_constraints']
-        x = utils.as_numpy(x).reshape(n, -1)
-
-        # set up the quadratic program
-        # min_{v} v^T*v
-        # s.t.
-        # 1)  A(x + v) <= b        (<==>)    Av <= b - Ax
-        # 2)  A_eq(x + v) =  b_eq  (<==>)    A_eq v = b_eq - A_eq x
-
-
-        n = np.shape(self.ub_A)[1]
-        x = utils.as_numpy(x).reshape(n, -1)
-
-        P = matrix(np.identity(n))
-        G = matrix(self.ub_A)
-        h = matrix(self.ub_b - np.matmul(self.ub_A, x)[:, 0])
-        q = matrix(np.zeros([n, 1]))
-        A = matrix(self.a_eq)
-        b = matrix(self.b_eq - np.matmul(self.a_eq, x))
-
-        quad_program_result = solvers.qp(P, q, G, h, A, b)
-
-        if quad_program_result['status'] == 'optimal' or quad_program_result['status'] == 'unknown':
-            v = np.array(quad_program_result['x'])
-            return np.linalg.norm(v), x + v.reshape(n,-1)
-        else:
-            raise Exception("QPPROG FAILED: " + quad_program_result['status'])
-
-
-    def get_hyperplane_proj_l2(self, x_0):
-        """ Finds l_2 projection from x_0 onto the hyperplane defined by
-            the object's tight constraints
-        """
-
-        if len(self.tight_list) != 1:
-            raise Exception("Hyperplane projection only implemented \
-                            for (n-1) dim. faces")
-        a = self.a_eq[0]
-        b = self.b_eq[0]
-        x_0 = x_0.reshape(np.shape(a))
-
-        projection = x_0 + (b - np.inner(x_0, a))/np.inner(a, a)*a
-
-        return projection
-
-    def l2_projection(self, x, lp_norm):
-        """ Computes the l2 distance between point x and the hyperplane that
-            this face lies on. Serves as a lower bound to the l2 distance
-            {y | <a,y> =b}.
-            This is equivalent to (b - <a,x>)/ ||a||_*
-            for ||.||_* being the dual norm
-        """
-        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
-
-        eq_a = self.a_eq
-        eq_b = self.b_eq
-        return (eq_b - np.matmul(eq_a, x)) / np.linalg.norm(eq_a.squeze(),
-                                                            ord=dual_norm)
-
-    def reject_via_upper_bound(self, upper_bound_dict):
-        """ Takes in a dict w/ keys:
-            {'upper_bound': float of upper bound of dist to decision bound,
-             'x': point we're verifying robustness for,
-             'norm': ['l_2'| 'l_inf'], which norm we care about
-             (optional) 'hypercube': [lo, hi] If present, describes
-                         the dimension of the [lo,hi]^n hypercube that is the
-                         domain of our problem
-
-            Returns TRUE if we can reject this facet, FALSE O.w.
-        """
-        lp_norm = upper_bound_dict['lp_norm']
-        x = upper_bound_dict['x']
-        dual_norm = {'l_2': None, 'l_inf': 1}[lp_norm]
-        eq_a = self.a_eq.squeeze()
-        eq_b = self.b_eq.item()
-        proj = (eq_b - np.dot(x, eq_a.T)) / np.linalg.norm(eq_a, ord=dual_norm)
-
-        if proj > upper_bound_dict['upper_bound']:
-            return True, 'upper_bound'
-
-        if 'hypercube' in upper_bound_dict:
-            lo, hi = upper_bound_dict['hypercube']
-            central_point = np.ones_like(x.cpu().numpy()) * ((lo + hi) / 2.0)
-            central_point = central_point.squeeze()
-            overshot = -1 if (np.matmul(eq_a, central_point).item() >= eq_b) else 1
-            corner_signs = (np.sign(eq_a) * overshot).T.squeeze()
-            corner = central_point + corner_signs * (lo + hi) / 2.0
-            overshot_2 = -1 if (np.matmul(eq_a, corner).item() >= eq_b) else 1
-
-            if overshot == overshot_2:
-                return True, 'hypercube'
-
-
-        return False, None
-
-
-    def get_inequality_constraints(self):
-
-        """ Converts equality constraints into inequality constraints
-            and gathers them all together
-        """
-
-        A = np.vstack((self.ub_A, np.multiply(self.a_eq, -1.0)))
-        b = np.hstack((self.ub_b, np.multiply(self.b_eq, -1.0)))
-
-        return A, b
