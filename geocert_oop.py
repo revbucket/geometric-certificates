@@ -330,7 +330,6 @@ class IncrementalGeoCert(object):
         {'l_inf': self.domain.set_l_inf_upper_bound,
           'l_2': self.domain.set_l_2_upper_bound}[lp_norm](upper_bound)
 
-        i
         return upper_bound, best_adv
 
 
