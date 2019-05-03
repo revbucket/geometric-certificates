@@ -50,13 +50,13 @@ for input_dim in xs:
 
     x_0 = torch.Tensor(np.random.uniform(size=(input_dim)).reshape([input_dim, 1]))
     poly_dict = network.compute_polytope(x_0)
-    polytope_true = Polytope.from_polytope_dict(poly_dict)
+    polytope = Polytope.from_polytope_dict(poly_dict)
 
     # ==================================
     # Get Boundary
     # ==================================
 
-    boundary = polytope_true.generate_facets_naive(check_feasible=True)
+    boundary = polytope.generate_facets_naive(check_feasible=True)
 
     essential_indices = []
     for face in boundary:
@@ -69,6 +69,17 @@ for input_dim in xs:
     print(true_num)
 
     print('===================')
+
+    # ----------Plot Constraints and Stuff---------------
+    x_0_np = utils.as_numpy(x_0)
+    poly_list = [polytope]
+    ax = plt.axes()
+    xylim = [-5, 5]
+    utils.plot_polytopes_2d(poly_list, ax=ax, xylim=xylim)
+    utils.plot_2d_lines(polytope.ub_A, polytope.ub_b, xylim, color='red')
+    utils.plot_2d_lines(polytope.ub_Aessential_indices[essential_indices], polytope.ub_b[essential_indices], xylim, color='black')
+    ax.scatter(x_0_np[0], x_0_np[1], s=10)
+    plt.show()
 
 
     # ==================================
