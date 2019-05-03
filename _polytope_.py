@@ -113,7 +113,6 @@ class Polytope(object):
         reject_dict = defaultdict(int)
 
         domain_feasible = self.domain.feasible_facets(self.ub_A, self.ub_b)
-        print("DFEAS", domain_feasible)
 
         ######################################################################
         #   Step 1: Remove facets that are tight on dead constraints         #
@@ -1028,7 +1027,6 @@ class Face(Polytope):
             return cvxopt_out['primal objective'], \
                    (x_row + np.array(cvxopt_out['x'])[:-1].squeeze())
         elif cvxopt_out['status'] in ['primal infeasible', 'unknown']:
-            print("PRIMAL INFEASIBLE")
             return None, None
         else:
             print("About to fail...")
