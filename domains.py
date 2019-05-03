@@ -310,7 +310,7 @@ class Domain(object):
         A_minus = np.minimum(A, 0)
 
         upper_check = (A_plus.dot(self.box_high) +
-                       A_minus.dot(self.box_high)) >= b
+                       A_minus.dot(self.box_low)) >= b
         lower_check = (A_plus.dot(self.box_low) +
                        A_minus.dot(self.box_high)) <= b
         total_check = np.logical_and(upper_check, lower_check)
