@@ -124,7 +124,7 @@ class PLNN(nn.Module):
                              np.hstack((poly_b, constraint_b_to_add)),
                              [num_constraints], config=flat_config,
                              domain=domain)
-            new_facet.check_feasible()
+            new_facet.check_facet_feasible() # within domains
             if new_facet.is_feasible:
                 facets.append(new_facet)
 

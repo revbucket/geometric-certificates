@@ -442,7 +442,6 @@ class IncrementalGeoCert(object):
             adv_bound, adv_ex = self._compute_upper_bounds(x, self.true_label,
                                                            lp_norm,
                                        extra_attack_kwargs=compute_upper_bound)
-        return self.domain
         ######################################################################
         #   Step 1: handle the initial polytope                              #
         ######################################################################

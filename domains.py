@@ -209,6 +209,32 @@ class Domain(object):
                 'l_inf': self.linf_radius}[lp_norm]
 
 
+    def contains(self, y):
+        """ Given a numpy array y (of shape (self.dimension,)), checks to see
+            if y is valid in the domain
+        """
+
+        assert isinstance(y, np.ndarray)
+        y = y.reshape(-1)
+
+        checks = []
+
+        # Box checks
+        if self.box_low is not None:
+            checks.append(all(y >= self.box_low))
+        if self.box_high is not None:
+            checks.append((all(y <= self.box_high)))
+
+        # Linf checks
+        if self.linf_radius is not None:
+            checks.append(abs(y - self.x).max() <= self.linf_radius)
+
+        # L2 checks
+        if self.l2_radius is not None:
+            checks.append(np.linalg.norm(y - self.x, 2) <= self.l2_radius)
+
+        return all(checks)
+
 
     ###########################################################################
     #                                                                         #
@@ -327,7 +353,7 @@ class Domain(object):
         if not set_lo:
             self.box_low = self._compute_new_lohi('lo', lo)
         if not set_hi:
-            self.box_hi = self._compute_new_lohi('hi', hi)
+            self.box_high = self._compute_new_lohi('hi', hi)
 
         return
 
@@ -343,6 +369,9 @@ class Domain(object):
         else:
             self.linf_radius = min(linf_radius, self.linf_radius)
         return self.linf_radius
+
+
+
 
 
 

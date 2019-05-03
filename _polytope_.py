@@ -872,10 +872,6 @@ class Face(Polytope):
             assert len(self.tight_list) == 1
             tight_idx = self.tight_list[0]
             d_A, d_b = self.domain.box_constraints()
-
-            #d_A, d_b = self.domain.nonredundant_box_constraints(self.ub_A,
-            #                                                    self.ub_b,
-            #                                                    tight_idx)
             # Append domain constraints
             A = np.vstack((A, d_A))
             b = np.hstack((b, d_b))
@@ -931,6 +927,125 @@ class Face(Polytope):
 
 
     def linf_dist(self, x):
+        """ Computes the l_infinity distance to point x using LP
+            The linear program is as follows
+
+            min_{t, v} t
+            such that
+            1) A(x + v) <= b        (<==>)  Av <= b - Ax
+            2) -t <= v_i <= t       (<==>)  v_i - t <= 0  AND -v_i -t <= 0
+            3) (x + v) in Domain
+            4) A_eq(x + v) = b_eq   (<==>)
+
+            so if A has shape (m,n) and domain constraints have shape (d, n)
+            - (n + 1) variables
+            - (m + 2n + d) inequality constraints
+            - 1 equality constraint
+        """
+
+        ######################################################################
+        #       Setup things needed for linprog                              #
+        ######################################################################
+
+        m, n = self.ub_A.shape
+        zero_m_col = np.zeros((m, 1))
+        zero_n_col = np.zeros((n, 1))
+        x_row = utils.as_numpy(x).squeeze()
+        x_col = x_row.reshape(n, 1)
+
+
+        ######################################################################
+        #       Build constraints row by row                                 #
+        ######################################################################
+
+        # VARIABLES ARE (v, t)
+
+
+        a_constraints = []
+        b_constraints = []
+
+        # Constraint 1 has shape (m, n+1)
+        constraint_1a = np.hstack((self.ub_A, zero_m_col))
+        constraint_1b = (self.ub_b - self.ub_A.dot(x_col).squeeze()).reshape(-1)
+
+        assert constraint_1a.shape == (m, n + 1)
+        assert constraint_1b.shape == (m,)
+
+        a_constraints.append(constraint_1a)
+        b_constraints.append(constraint_1b)
+
+        # Constraint 2 has shape (2n, n+1)
+        constraint_2a_left = np.vstack((np.eye(n), -1 * np.eye(n)))
+        constraint_2a = np.hstack((constraint_2a_left,
+                                   -1 * np.ones((2 * n, 1))))
+        constraint_2b = np.zeros(2 * n)
+
+        assert constraint_2a.shape == (2 * n, n + 1)
+        assert constraint_2b.shape == (2 * n,)
+        a_constraints.append(constraint_2a)
+        b_constraints.append(constraint_2b)
+
+
+        # Constraint 3 is added by the domain
+        # If a full box, should have shape (2n, n + 1)
+        d_a, d_b = self.domain.box_constraints()
+        if d_a is not None:
+            constraint_d_a = np.hstack((d_a, np.zeros((2 * n, 1))))
+            constraint_d_b = d_b + np.hstack((x_row, -x_row))
+
+            assert constraint_d_a.shape == (2 * n, n + 1)
+            assert constraint_d_b.shape == (2 * n,)
+
+            a_constraints.append(constraint_d_a)
+            b_constraints.append(constraint_d_b)
+
+
+
+        # Constraint 4 is equality constraint, should have (1, n+1)
+        a_eq = matrix(np.hstack((self.a_eq, np.zeros((1, 1)))))
+        b_eq = matrix(self.b_eq - self.a_eq.dot(x_row))
+
+
+
+        # Objective should have length (n + 1)
+        c = matrix(np.zeros(n + 1))
+        c[-1] = 1
+
+
+        ub_a = matrix(np.vstack(a_constraints))
+        ub_b = matrix(np.hstack(b_constraints))
+
+        cvxopt_out = solvers.lp(c, ub_a, ub_b, A=a_eq, b=b_eq, solver='glpk')
+        if cvxopt_out['status'] == 'optimal':
+            return cvxopt_out['primal objective'], \
+                   (x_row + np.array(cvxopt_out['x'])[:-1])
+        else:
+            print("About to fail...")
+            print("CVXOPT status", cvxopt_out['status'])
+            print("INTERIOR SHAPE", self.interior.shape)
+            # WHAT's wrong
+            interior_row = self.interior.squeeze()
+            v = interior_row - x_row
+            t = abs(v).max()
+
+            primal_var = np.hstack((v, t))
+            print("PRIMAL VAR SHAPE", primal_var.shape)
+            print("A SHAPE", np.array(ub_a).shape)
+            print("B SHAPE", np.array(ub_b).shape)
+            print(constraint_d_a[0], constraint_d_b[0])
+            constraint_sat = np.array(ub_a).dot(primal_var) <= np.array(ub_b).squeeze()
+            print([i for i, el in enumerate(constraint_sat) if not el])
+            print(np.array(a_eq).dot(primal_var), np.array(b_eq))
+
+            print("INDOMAIN", self.domain.contains(self.interior))
+
+            #print("INTERIOR IS ", self.interior)
+            raise Exception("LINF DIST FAILED?")
+
+
+
+
+    def old_linf_dist(self, x):
         #TODO: this method doesn't  seem to always correctly find the projection onto a facet
 
         """ Returns the l_inf distance to point x using LP
@@ -998,8 +1113,9 @@ class Face(Polytope):
         else:
             print("About to fail...")
             print("CVXOPT status", cvxopt_out['status'])
+            print("INDOMAIN", self.domain.contains(self.interior))
 
-            print("INTERIOR IS ", self.interior)
+            #print("INTERIOR IS ", self.interior)
             raise Exception("LINF DIST FAILED?")
 
 
