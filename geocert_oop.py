@@ -293,6 +293,14 @@ class IncrementalGeoCert(object):
         labels = [true_label for _ in range(num_repeats)]
         labels = torch.Tensor(labels).long()
 
+        # Use the GPU to build adversarial attacks if we can
+        USE_GPU = torch.cuda.is_available()
+        if USE_GPU:
+            new_x = new_x.cuda()
+            labels = labels.cuda()
+            self.net.cuda()
+
+
         ######################################################################
         #   Run the attack and collect the best (if any) successful example  #
         ######################################################################
@@ -309,6 +317,10 @@ class IncrementalGeoCert(object):
         max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
         best_adv = success_out['adversarials'][max_idx].squeeze()
 
+        if USE_GPU:
+            best_adv = best_adv.cpu()
+            labels = labels.cpu()
+            self.net.cpu()
 
         if self.lp_norm == 'l_inf':
             upper_bound = (best_adv - x.view(-1)).abs().max().item()
@@ -318,6 +330,7 @@ class IncrementalGeoCert(object):
         {'l_inf': self.domain.set_l_inf_upper_bound,
           'l_2': self.domain.set_l_2_upper_bound}[lp_norm](upper_bound)
 
+        i
         return upper_bound, best_adv
 
 
