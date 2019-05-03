@@ -76,17 +76,10 @@ class Polytope(object):
         facets = []
 
         for i in range(num_constraints):
-            if self._is_dead(i):
-                continue
-            facet = Face(self.ub_A, self.ub_b, [i], config=self.config,
-                         _domain_structure=self._domain_structure,
-                         dead_constraints=self.dead_constraints)
+            facet = Face(self.ub_A, self.ub_b, [i])
             if check_feasible:
-                facet.check_feasible()
-            facet.check_facet()
-
-            if facet.is_facet:
-                facets.append(facet)
+                check = facet.check_feasible()
+                if check: facets.append(facet)
         return facets
 
 

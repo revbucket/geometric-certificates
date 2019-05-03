@@ -2,13 +2,12 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from plnn import PLNN
-from _polytope_ import from_polytope_dict
 from geocert import batch_GeoCert
 import utilities as utils
 
 from geocert import compute_boundary_batch, batch_GeoCert, incremental_GeoCert
 from plnn import PLNN
-from _polytope_ import Polytope, from_polytope_dict
+from _polytope_ import Polytope
 import utilities as utils
 import os
 import matplotlib.pyplot as plt
@@ -21,6 +20,24 @@ from torch.autograd import Variable
 
 
 
+def unit_vector(vector):
+    """ Returns the unit vector of the vector.  """
+    return vector / np.linalg.norm(vector)
+
+def angle_between(v1, v2):
+    """ Returns the angle in radians between vectors 'v1' and 'v2'::
+            >>> angle_between((1, 0, 0), (0, 1, 0))
+            1.5707963267948966
+            >>> angle_between((1, 0, 0), (1, 0, 0))
+            0.0
+            >>> angle_between((1, 0, 0), (-1, 0, 0))
+            3.141592653589793
+    """
+    v1_u = unit_vector(v1)
+    v2_u = unit_vector(v2)
+    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+
+
 # ==================================== #
 # Experiment
 # ==================================== #
@@ -30,7 +47,7 @@ from torch.autograd import Variable
 
 fractions = []
 powers = []
-xs = [elem for elem in np.linspace(70, 70,  1)]
+xs = [elem for elem in np.linspace(2, 2,  1)]
 dtype=torch.FloatTensor
 
 for input_dim in xs:
@@ -41,7 +58,8 @@ for input_dim in xs:
     # ==================================
 
     print('===============Initializing Network============')
-    layer_sizes = [input_dim, 50, 30, 30, 2]
+    # layer_sizes = [input_dim, 50, 30, 30, 2]
+    layer_sizes = [input_dim, 5, 5, 2]
     network = PLNN(layer_sizes, dtype)
     net = network.net
 
@@ -51,71 +69,52 @@ for input_dim in xs:
 
     x_0 = torch.Tensor(np.random.uniform(size=(input_dim)).reshape([input_dim, 1]))
     poly_dict = network.compute_polytope(x_0)
-    polytope_true = from_polytope_dict(poly_dict)
+    polytope = Polytope.from_polytope_dict(poly_dict)
 
     # ==================================
     # Get Boundary
     # ==================================
 
-    _, boundary, shared_facets = batch_GeoCert([polytope_true,], x_0)
-
+    boundary = polytope.generate_facets_naive(check_feasible=True)
 
     essential_indices = []
     for face in boundary:
         essential_indices.append(face.tight_list[0])
+
     print('essential_indices')
     print(essential_indices)
-
     print('true number:')
     true_num = np.shape(boundary)[0]
     print(true_num)
 
-    previous = 0
-    power = 2
-    max_iter = 2
-    my_iter = 0
-    new = 1
-    max = 1
-    max_power = 2
-    while my_iter < max_iter:
-        # ==================================
-        # Find Non-Redundant Constraints (random sampling + projection)
-        # ==================================
-        polytope = from_polytope_dict(poly_dict)
-        num_pts = int(input_dim**power)
-        num_pts = 10
-        burn = input_dim*polytope.ub_A.shape[0]
-        burn = 100
+    # ==================================
+    # Find Non-redundant Constraints
+    # ==================================
 
-        polytope.essential_constraints_rand_walk(burn=burn, count=num_pts)
+    center = utils.as_numpy(x_0).T
+    n = np.shape(polytope.ub_A)[0]
+    d = (polytope.ub_b-np.matmul(polytope.ub_A, center.T).reshape(-1,))/np.diagonal(np.matmul(polytope.ub_A, polytope.ub_A.T))
+    projections = np.tile(center, (n, 1)) + np.matmul(np.diag(d), polytope.ub_A)
 
-        nums = []
-        for index in essential_indices:
-            if not polytope.redundant[index] and polytope.redundant[index] is not None:
-                nums.append(1)
-        num_found = np.sum(nums)
-        print('num found:')
-        print(num_found)
-        fraction = num_found/true_num
-        print(fraction)
 
-        if num_found > max:
-            max = num_found
-            max_power = power
-        previous = new
-        new = num_found
-        my_iter += 1
-        power = power + 0.2
+    # ----------Plot Constraints and Stuff---------------
+    x_0_np = utils.as_numpy(x_0)
+    poly_list = [polytope]
+    ax = plt.axes()
+    xylim = [-5, 5]
+    utils.plot_polytopes_2d(poly_list, ax=ax, xylim=xylim)
+    utils.plot_hyperplanes(polytope.ub_A, polytope.ub_b, color='red')
+    utils.plot_hyperplanes(polytope.ub_A[essential_indices], polytope.ub_b[essential_indices], color='black', ax=ax)
+    ax.scatter(x_0_np[0], x_0_np[1], s=10)
 
-    fractions.append(fraction)
-    powers.append(power)
+    for projection in projections:
+        ax.plot([x_0_np[0], projection[0]], [x_0_np[1], projection[1]])
+
+
 
     print('===================')
 
-
-plt.plot(xs, fractions)
-plt.plot(xs, powers)
-plt.show()
+    plt.show()
 
 
 
