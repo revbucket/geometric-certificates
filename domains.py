@@ -29,16 +29,41 @@ class Domain(object):
         self.l2_radius = None
         self.linf_radius = None
 
-
+        # Original box constraints to be kept separate from those generated
+        # by upper bounds.
+        self.original_box_low = None
+        self.original_box_high = None
+        self.unmodified_bounds_low = None
+        self.unmodified_bounds_high = None
 
     ###########################################################################
     #                                                                         #
     #                   FORWARD FACING METHODS                                #
     #                                                                         #
     ###########################################################################
+    def set_original_hyperbox_bound(self, lo, hi):
+        """ Sets the original hyperbox bounds which don't ever get modified """
+
+        # Standard hyperbox setup
+        lo = self._number_to_arr(lo)
+        hi = self._number_to_arr(hi)
+        self.set_hyperbox_bound(lo, hi)
+
+        # And then do the original things
+        self.original_box_low = lo
+        self.original_box_high = hi
+        self.unmodified_bounds_high = np.ones(self.dimension, dtype=np.bool)
+        self.unmodified_bounds_low = np.ones(self.dimension, dtype=np.bool)
+
+
 
     def set_hyperbox_bound(self, lo, hi):
         self._add_box_constraint(lo, hi)
+
+    def set_upper_bound(self, bound, lp_norm):
+        {'l_inf': self.set_l_inf_upper_bound,
+         'l_2': self.set_l_2_upper_bound}[lp_norm](bound)
+
 
     def set_l_inf_upper_bound(self, bound):
         assert self.x is not None
@@ -101,6 +126,25 @@ class Domain(object):
         both_set = l_inf_set.intersection(l_2_set)
         return set(map_fxn(i) for i in both_set)
 
+
+
+    def original_box_constraints(self):
+        """ Returns two np arrays for the hyperplane constraints that are in
+            both the original constraints and the hyperbox low/hi bounds
+        """
+        eps = 1e-8
+        As, bs = [], []
+        if self.box_low is not None:
+            As.append(-1 * np.eye(self.dimension)[self.unmodified_bounds_low])
+            bs.append((-1 * self.box_low[self.unmodified_bounds_low]))
+        if self.box_high is not None:
+            As.append(np.eye(self.dimension)[self.unmodified_bounds_high])
+            bs.append((self.box_high[self.unmodified_bounds_high]))
+
+        if As != []:
+            return np.vstack(As), np.hstack(bs)
+        else:
+            return None, None
 
 
     def box_constraints(self):
@@ -314,14 +358,17 @@ class Domain(object):
             vals: np.array of dimension self.dimension - new bounds to be
                                                          considered
         RETURNS:
-            array that's elementwise max or min, depending
+            - array that's elementwise max or min, depending on lo_or_hi
+            - boolean numpy array with the things that have changed
         """
+        eps = 1e-8
         assert lo_or_hi in ['lo', 'hi']
         assert isinstance(vals, np.ndarray) and vals.shape == (self.dimension,)
         comp = {'lo': np.maximum,'hi': np.minimum}[lo_or_hi]
         current = {'lo': self.box_low, 'hi': self.box_high}[lo_or_hi]
-        return comp(vals, current)
-
+        output = comp(vals, current)
+        unchanged = abs(current - output) < eps
+        return output, unchanged
 
     def _add_box_constraint(self, lo, hi):
         """ Adds a box constraint.
@@ -351,9 +398,13 @@ class Domain(object):
 
         # Otherwise, set the lows and highs by taking elementwise max/min
         if not set_lo:
-            self.box_low = self._compute_new_lohi('lo', lo)
+            self.box_low, low_unchanged = self._compute_new_lohi('lo', lo)
+            np.logical_and(self.unmodified_bounds_low, low_unchanged,
+                           self.unmodified_bounds_low)
         if not set_hi:
-            self.box_high = self._compute_new_lohi('hi', hi)
+            self.box_high, high_unchanged = self._compute_new_lohi('hi', hi)
+            np.logical_and(self.unmodified_bounds_high, high_unchanged,
+                           self.unmodified_bounds_high)
 
         return
 

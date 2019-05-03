@@ -123,10 +123,10 @@ class PLNN(nn.Module):
             new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
                              np.hstack((poly_b, constraint_b_to_add)),
                              [num_constraints], config=flat_config,
-                             domain=domain)
-            new_facet.check_facet_feasible() # within domains
+                             domain=domain, facet_type='decision')
+            new_facet.check_feasible()
             if new_facet.is_feasible:
-                facets.append(new_facet)
+               facets.append(new_facet)
 
         return facets
 

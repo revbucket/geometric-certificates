@@ -2,6 +2,7 @@
     implementation went -mj (3/1/19)
 """
 import sys
+import itertools
 sys.path.append('mister_ed')
 import adversarial_perturbations as ap
 import prebuilt_loss_functions as plf
@@ -21,7 +22,7 @@ import time
 import matplotlib.pyplot as plt
 
 import torch.nn.functional as F
-
+import joblib
 ##############################################################################
 #                                                                            #
 #                               BATCHED GEOCERT                              #
@@ -216,7 +217,6 @@ class IncrementalGeoCert(object):
         self.true_label = None # filled in later
         self.lp_dist = None # filled in later
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
-        self.seen_to_facet_map = {} # binary config str -> Facet list
         self.pq = [] # Priority queue that contains HeapElements
         self.dead_constraints = [None] # wrapped in a dynamic object
         self.domain = None # keeps track of domain and upper bounds
@@ -308,9 +308,14 @@ class IncrementalGeoCert(object):
         diffs = pert_out.delta.data.index_select(0, success_idxs)
         max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
         best_adv = success_out['adversarials'][max_idx].squeeze()
-        upper_bound = (best_adv - x.view(-1)).abs().max().item()
 
-        {'l_inf': self.domain.set_l_inf_upper_bound, 
+
+        if self.lp_norm == 'l_inf':
+            upper_bound = (best_adv - x.view(-1)).abs().max().item()
+        elif self.lp_norm == 'l_2':
+            upper_bound = torch.norm(best_adv - x.view(-1), p=2).item()
+
+        {'l_inf': self.domain.set_l_inf_upper_bound,
           'l_2': self.domain.set_l_2_upper_bound}[lp_norm](upper_bound)
 
         return upper_bound, best_adv
@@ -319,7 +324,8 @@ class IncrementalGeoCert(object):
     def _update_dead_constraints(self):
         full_dead_constraints = self.net.compute_interval_bounds(self.domain)
         tensor_dead_constraints = full_dead_constraints[1]
-        self.dead_constraints = utils.cat_config(tensor_dead_constraints)        
+        self.dead_constraints = utils.cat_config(tensor_dead_constraints)
+
 
 
     def _update_step(self, poly, popped_facet):
@@ -336,72 +342,70 @@ class IncrementalGeoCert(object):
             None, but modifies the heap
         """
 
-        ######################################################################
-        #   Generate new facets and check feasibility/interior point-ness    #
-        ######################################################################
-
-
+        #######################################################################
+        #   Generate new facets in this polytope and do fast rejection checks #
+        #######################################################################
+        # Compute polytope boundaries, rejecting where we can
         new_facets, rejects = self.facet_config_fxn(poly,
-                                              self.seen_to_polytope_map,
-                                              self.net, 
-                                              **self.config_fxn_kwargs)
+                                              self.seen_to_polytope_map)
         self._verbose_print("Num facets: ", len(new_facets))
         self._verbose_print("REJECT DICT: ", rejects)
 
-        current_upper_bound = self.domain.current_upper_bound(self.lp_norm)
-        ######################################################################
-        #   Add new feasible facets to priority queue                        #
-        ######################################################################
-        handled_popped_facet = (popped_facet == None)
-        for facet in new_facets:
-            if (not handled_popped_facet) and\
-                popped_facet.facet.check_same_facet_config(facet):
-                handled_popped_facet = True
-                continue
-            facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet,
-                                  facet_type='facet',
-                                  exact_or_estimate='exact')
-            heap_el.projection = projection
-
-            if (current_upper_bound is None or
-                facet_distance < current_upper_bound):
-                heapq.heappush(self.pq, heap_el)
-
-        poly_config = utils.flatten_config(poly.config)
-
-        self.seen_to_polytope_map[poly_config] = poly
-        self.seen_to_facet_map[poly_config] = new_facets
-
-        ######################################################################
-        #   Handle adversarial constraints                                   #
-        ######################################################################
-
+        # Compute adversarial facets, rejecting where we can
         adv_constraints = self.net.make_adversarial_constraints(poly.config,
                               self.true_label, self.domain)
 
-        # Step 3) Adds the adversarial constraints
-        for facet in adv_constraints:
-            facet_distance, projection = self.lp_dist(facet, self.x)
-            heap_el = HeapElement(facet_distance, facet, facet_type='decision',
-                                  exact_or_estimate='exact')
-            heap_el.projection = projection
-            if (current_upper_bound is None or
-                facet_distance < current_upper_bound):
-                heapq.heappush(self.pq, heap_el)
+        ######################################################################
+        #   Compute min-dists/feasibilities using LP/QP methods              #
+        ######################################################################
+        chained_facets = itertools.chain(new_facets, adv_constraints)
+        parallel_args = [(_, self.x) for _ in chained_facets]
+        dist_fxn = lambda el: (el[0], self.lp_dist(*el))
+        self._verbose_print("NEW FACETS", len(parallel_args))
+
+
+        if (len(parallel_args) > 1 and
+            self.config_fxn_kwargs.get('num_jobs', 1) > 1):
+            # Do optimizations in parallel
+            map_fxn = joblib.delayed(dist_fxn)
+            n_jobs = self.config_fxn_kwargs['num_jobs']
+            outputs = joblib.Parallel(n_jobs=n_jobs)(map_fxn(_)
+                                                     for _ in parallel_args)
+        else:
+            # Do optimizations in serial
+            outputs = [dist_fxn(_) for _ in parallel_args]
+
+
+        ######################################################################
+        #   With distances in hand, make HeapElements                        #
+        ######################################################################
+        current_upper_bound = self.domain.current_upper_bound(self.lp_norm)
+        for facet, (dist, proj) in outputs:
+            if dist is None:
+                continue
             else:
-                if len(self.pq) == 0:
-                    raise Exception("WHAT IS GOING ON???")
+                heap_el = HeapElement(dist, facet,
+                                      facet_type=facet.facet_type,
+                                      exact_or_estimate='exact')
+                heap_el.projection = proj
 
-            # HEURISTIC: IMPROVE UPPER BOUND IF POSSIBLE
             if (current_upper_bound is None or
-                facet_distance < current_upper_bound):            
-                bound_setter_dict = {'l_inf': self.domain.set_l_inf_upper_bound, 
-                                     'l_2': self.domain.set_l_2_upper_bound}
-                bound_setter_dict[self.lp_norm](facet_distance)
+                dist < current_upper_bound):
+                # If feasible and worth considering push onto heap
+                heapq.heappush(self.pq, heap_el)
 
-                # also update dead constraints for all facets
-                self._update_dead_constraints()
+
+                if facet.facet_type == 'decision':
+                    # If also a decision bound, update the upper bound/domain
+                    self.domain.set_upper_bound(dist, self.lp_norm)
+                    current_upper_bound =\
+                                   self.domain.current_upper_bound(self.lp_norm)
+                    self._update_dead_constraints()
+
+        # Mark that we've handled this polytope
+        poly_config = utils.flatten_config(poly.config)
+        self.seen_to_polytope_map[poly_config] = poly
+
 
 
     def min_dist(self, x, lp_norm='l_2', compute_upper_bound=False):
@@ -432,16 +436,19 @@ class IncrementalGeoCert(object):
                         'l_inf': Face.linf_dist}[self.lp_norm]
         self.domain = Domain(x.numel(), x)
         if self.hyperbox_bounds is not None:
-            self.domain.set_hyperbox_bound(*self.hyperbox_bounds)
+            self.domain.set_original_hyperbox_bound(*self.hyperbox_bounds)
+            self._update_dead_constraints()
 
         upper_bound_attr = {'l_2': 'l2_radius',
                             'l_inf': 'linf_radius'}[lp_norm]
+
 
 
         if compute_upper_bound is not False:
             adv_bound, adv_ex = self._compute_upper_bounds(x, self.true_label,
                                                            lp_norm,
                                        extra_attack_kwargs=compute_upper_bound)
+
         ######################################################################
         #   Step 1: handle the initial polytope                              #
         ######################################################################
@@ -472,7 +479,7 @@ class IncrementalGeoCert(object):
                 self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
                                      getattr(self.domain, upper_bound_attr))
                 popped_facet = pop_el.facet
-                configs = popped_facet.get_new_configs(self.net)
+                configs = popped_facet.get_new_configs()
                 configs_flat = utils.flatten_config(configs)
 
 
@@ -498,6 +505,12 @@ class IncrementalGeoCert(object):
         best_example = pop_el.projection
         return pop_el.lp_dist, adv_bound, adv_ex, best_example, pop_el
 
+
+    ############################################################################
+    #                                                                          #
+    #                           2D METHODS                                     #
+    #                                                                          #
+    ############################################################################
 
 
 
