@@ -908,6 +908,27 @@ class Face(Polytope):
 
         return new_configs
 
+    def fast_domain_check(self):
+        """ Does the fast checks to see if we can reject this facet based on
+            the domain.
+        Returns:
+            True if we cannot reject this without checking an LP/QP
+            False if we can for sure reject this
+        """
+        domain = self.domain
+        # Do checks to see if this hyperplane intersects domain
+        domain_feasible = domain.feasible_facets(self.ub_A, self.ub_b,
+                                               indices_to_check=self.tight_list)
+
+        if len(domain_feasible) == 0:
+            return False
+
+        # Do checks to see if this hyperplane has projection inside ball
+        projection = domain.minimal_facet_projections(self.ub_A, self.ub_b,
+                                               indices_to_check=self.tight_list)
+        return len(projection) > 0
+
+
 
     def linf_dist(self, x):
         """ Computes the l_infinity distance to point x using LP
