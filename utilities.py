@@ -124,6 +124,12 @@ def fuzzy_vector_equal(x_vec, y_vec, tolerance=global_tolerance):
      """
     return all(abs(el) < tolerance for el in x_vec - y_vec)
 
+def fuzzy_vector_equal_plus(x_vec, y_vec, tolerance=global_tolerance):
+    """ Same as above, but for vectors.
+        x_vec, y_vec are 1d numpy arrays
+     """
+    bools = [abs(el) < tolerance for el in x_vec - y_vec]
+    return all(bools), bools
 
 def is_same_hyperplane_nocomp(a1, b1, a2, b2, tolerance=global_tolerance):
     """ Check same hyperplane when not comparison form """
@@ -306,28 +312,29 @@ def MVIE_ellipse(A, b):
 
     A = A.tolist()
     b = b.tolist()
-    with Model("lownerjohn_inner") as M:
-        # M.setLogHandler(sys.stdout)   # output of solver
-        m, n = len(A), len(A[0])
+    try:
+        with Model("lownerjohn_inner") as M:
+            # M.setLogHandler(sys.stdout)   # output of solver
+            m, n = len(A), len(A[0])
 
-        # Setup variables
-        t = M.variable("t", 1, Domain.greaterThan(0.0))
-        C = det_rootn(M, t, n)
-        d = M.variable("d", n, Domain.unbounded())
+            # Setup variables
+            t = M.variable("t", 1, Domain.greaterThan(0.0))
+            C = det_rootn(M, t, n)
+            d = M.variable("d", n, Domain.unbounded())
 
-        # (b-Ad, AC) generate cones
-        M.constraint("qc", Expr.hstack(Expr.sub(b, Expr.mul(A, d)), Expr.mul(A, C)),
-                     Domain.inQCone())
+            # (b-Ad, AC) generate cones
+            M.constraint("qc", Expr.hstack(Expr.sub(b, Expr.mul(A, d)), Expr.mul(A, C)),
+                         Domain.inQCone())
 
-        # Objective: Maximize t
-        M.objective(ObjectiveSense.Maximize, t)
+            # Objective: Maximize t
+            M.objective(ObjectiveSense.Maximize, t)
 
-        M.solve()
-        print('we got here')
-        print(C)
-        C, d = C.level(), d.level()
-        C = [C[i:i + n] for i in range(0, n * n, n)]
-        return C, d
+            M.solve()
+            C, d = C.level(), d.level()
+            C = [C[i:i + n] for i in range(0, n * n, n)]
+            return C, d
+    except:
+        return None, None
 
 
 

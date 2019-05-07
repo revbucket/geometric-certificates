@@ -46,8 +46,8 @@ def angle_between(v1, v2):
 # many non-redundant constraints
 
 fractions = []
-powers = []
-xs = [elem for elem in np.linspace(2, 2,  1)]
+fractions2 = []
+xs = [int(elem) for elem in np.linspace(2, 60,  10)]
 dtype=torch.FloatTensor
 
 for input_dim in xs:
@@ -58,8 +58,7 @@ for input_dim in xs:
     # ==================================
 
     print('===============Initializing Network============')
-    # layer_sizes = [input_dim, 50, 30, 30, 2]
-    layer_sizes = [input_dim, 5, 5, 2]
+    layer_sizes = [input_dim, 10, 10, 2]
     network = PLNN(layer_sizes, dtype)
     net = network.net
 
@@ -96,26 +95,68 @@ for input_dim in xs:
     d = (polytope.ub_b-np.matmul(polytope.ub_A, center.T).reshape(-1,))/np.diagonal(np.matmul(polytope.ub_A, polytope.ub_A.T))
     projections = np.tile(center, (n, 1)) + np.matmul(np.diag(d), polytope.ub_A)
 
+    approx_ess_indices = []
+    for i, projection in enumerate(projections):
+        if polytope.is_point_feasible(projection):
+            approx_ess_indices.append(i)
 
-    # ----------Plot Constraints and Stuff---------------
-    x_0_np = utils.as_numpy(x_0)
-    poly_list = [polytope]
-    ax = plt.axes()
-    xylim = [-5, 5]
-    utils.plot_polytopes_2d(poly_list, ax=ax, xylim=xylim)
-    utils.plot_hyperplanes(polytope.ub_A, polytope.ub_b, color='red')
-    utils.plot_hyperplanes(polytope.ub_A[essential_indices], polytope.ub_b[essential_indices], color='black', ax=ax)
-    ax.scatter(x_0_np[0], x_0_np[1], s=10)
+    print('approx essential_indices')
+    print(approx_ess_indices)
+    print('approx number:')
+    approx_num = np.shape(approx_ess_indices)[0]
+    print(approx_num)
+    fractions.append(approx_num/true_num)
 
-    for projection in projections:
-        ax.plot([x_0_np[0], projection[0]], [x_0_np[1], projection[1]])
+    # ==================================
+    # Find Non-redundant Constraints
+    # ==================================
+    #(improved by finding t separated point using LP)
+
+    # Find interior point using LP
+    center = polytope._interior_point()
+    n = np.shape(polytope.ub_A)[0]
+    d = (polytope.ub_b-np.matmul(polytope.ub_A, center.T).reshape(-1,))/np.diagonal(np.matmul(polytope.ub_A, polytope.ub_A.T))
+    projections = np.tile(center, (n, 1)) + np.matmul(np.diag(d), polytope.ub_A)
+
+    approx_ess_indices = []
+    for i, projection in enumerate(projections):
+        if polytope.is_point_feasible(projection):
+            approx_ess_indices.append(i)
+
+    print('approx essential_indices')
+    print(approx_ess_indices)
+    print('approx number:')
+    approx_num = np.shape(approx_ess_indices)[0]
+    print(approx_num)
+    fractions2.append(approx_num/true_num)
+
+    # ==================================
+    # Find Non-redundant Constraints
+    # ==================================
+    # Bouncing beam method
 
 
+    # # ----------Plot Constraints and Stuff---------------
+    # x_0_np = utils.as_numpy(x_0)
+    # poly_list = [polytope]
+    # ax = plt.axes()
+    # xylim = [-1, 1]
+    # utils.plot_polytopes_2d(poly_list, ax=ax, xylim=xylim)
+    # # utils.plot_hyperplanes(polytope.ub_A[essential_indices], polytope.ub_b[essential_indices], color='red', ax=ax)
+    # utils.plot_hyperplanes(polytope.ub_A[approx_ess_indices], polytope.ub_b[approx_ess_indices], color='black', ax=ax)
+    # ax.scatter(x_0_np[0], x_0_np[1], s=10)
+    #
+    # for i, projection in enumerate(projections):
+    #     if i in essential_indices:
+    #         ax.plot([center[0], projection[0]], [center[1], projection[1]])
+    # ax.scatter(center[0], center[1], s=30)
+    #
+    # print('===================')
+    #
+    # plt.show()
 
-    print('===================')
 
-    plt.show()
-
-
-
-
+plt.plot(xs, fractions, label='x_0')
+plt.plot(xs, fractions2, label='max_center')
+plt.legend()
+plt.show()
