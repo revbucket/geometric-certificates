@@ -338,6 +338,7 @@ def MVIE_ellipse(A, b):
 
 
 
+
 def ray_shoot(x_0, d, ptope, facets, facet_bools=None):
     ''' Given a list of facets, an initial point 'x_0', and direction 'd', method finds the first
         constraint hit in that direction. 'Facet_bools' decides if that facet is considered in the
@@ -639,7 +640,7 @@ def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
     ax.add_artist(circle)
 
 
-def plot_hyperplanes(ub_A, ub_b, styles=None, ax=plt.axes(), color='black'):
+def plot_hyperplanes(ub_A, ub_b, styles=None, ax=plt.axes()):
     ''' Plots all hyperplanes defined by each constraint of ub_A and ub_b'''
 
     if styles is None:
@@ -648,7 +649,7 @@ def plot_hyperplanes(ub_A, ub_b, styles=None, ax=plt.axes(), color='black'):
     for a, b, style in zip(ub_A, ub_b, styles):
         m = -a[0]/a[1]
         intercept = b/a[1]
-        plot_line(m, intercept, style, ax, color=color)
+        plot_line(m, intercept, style, ax)
 
 
 def get_spaced_colors(n):
@@ -673,12 +674,12 @@ def get_color_dictionary(list):
 
     return color_dict
 
-def plot_line(slope, intercept, style, ax=plt.axes(), color='black'):
+def plot_line(slope, intercept, style, ax=plt.axes()):
     """Plot a line from slope and intercept"""
     axes = plt.gca()
     x_vals = np.array(axes.get_xlim())
     y_vals = intercept + slope * x_vals
-    ax.plot(x_vals, y_vals, style, c=color)
+    ax.plot(x_vals, y_vals, style, c='black')
 
 def plot_ellipse(P, c, ax=plt.axes()):
     theta = np.linspace(0, 2 * np.pi, 100)
