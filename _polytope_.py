@@ -8,7 +8,8 @@ from mosek import iparam
 
 from cvxopt import matrix, solvers
 solvers.options['show_progress'] = False
-solvers.options['mosek'] = {iparam.log: 0}
+solvers.options['mosek'] = {iparam.log: 0,
+                            iparam.max_num_warnings: 0}
 import copy
 
 import joblib
@@ -1099,7 +1100,7 @@ class Face(Polytope):
         quad_start = time.time()
         quad_program_result = solvers.qp(P, q, G, h, A, b, solver='mosek')
         quad_end = time.time()
-        print("QP SOLVED IN %.03f seconds" % (quad_end - quad_start))
+        # print("QP SOLVED IN %.03f seconds" % (quad_end - quad_start))
 
         if quad_program_result['status'] == 'optimal': # or quad_program_result['status'] == 'unknown':
             v = np.array(quad_program_result['x'])

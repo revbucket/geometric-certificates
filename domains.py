@@ -8,7 +8,10 @@ import numpy as np
 import numbers
 import utilities as utils
 import torch
-
+import torch.nn as nn
+from convex_adversarial.convex_adversarial import DualNetBounds
+import copy
+from cvxopt import solvers, matrix
 
 
 class Domain(object):
@@ -421,7 +424,55 @@ class Domain(object):
             self.linf_radius = min(linf_radius, self.linf_radius)
         return self.linf_radius
 
+    ###########################################################################
+    #                                                                         #
+    #                   HELPERS FOR L2 DEAD CONSTRAINTS                       #
+    #                                                                         #
+    ###########################################################################
 
+
+    def l2_bound_layer1(self, weight, bias, x):
+        """ Given input weights and biases will compute if each neuron can be
+            on or off
+
+        We do this using cvxopt conelp, but it's a messy formulation
+        the G matrix looks like
+        [ -I | I | 0row | -I]^T
+        and the h matrix looks like
+        [-lo_bounds, u_bounds, radius, -x]
+        """
+
+        G_list = [-1 * np.eye(self.dimension),
+                  np.eye(self.dimension),
+                  np.zeros((1, self.dimension)),
+                  -1 * np.eye(self.dimension)]
+        G = matrix(np.vstack(G_list).astype(np.float))
+
+        h_list = [-1 * self.box_low,
+                  self.box_high,
+                  np.array([self.l2_radius]),
+                  -x]
+        h = matrix(np.hstack(h_list).astype(np.float))
+
+        dims = {'l': self.dimension * 2, 'q': [self.dimension + 1], 's': [0]}
+
+        m = weight.shape[0]
+
+        # Do lowers first
+        new_lows, new_highs = [], []
+        for scale, working_list in [(1, new_lows), (-1, new_highs)]:
+            for i in range(m):
+                if (i % 10) == 0:
+                    print(scale, i)
+                c = matrix(weight[i].astype(np.float) * scale)
+                import time
+                start = time.time()
+                solve_out = solvers.conelp(c, G, h, dims, solver='mosek')
+                print(i, time.time() - start)
+                working_list.append(scale * solve_out['primal objective'] +
+                                    bias[i])
+
+        return new_lows, new_highs
 
 
 
