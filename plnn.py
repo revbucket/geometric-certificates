@@ -7,6 +7,9 @@ from collections import OrderedDict
 import numpy as np
 
 import time
+import copy
+import convex_adversarial.convex_adversarial as ca
+
 
 
 class PLNN(nn.Module):
@@ -220,7 +223,7 @@ class PLNN(nn.Module):
 
         box = domain_obj.box_to_tensor()
         # setup + asserts
-        assert all(box[0] <= box[1])
+        assert all(box[:, 0] <= box[:, 1])
 
         midpoint_matrix = torch.Tensor([[1.0], [1.0]]) / 2.0
         ranges_matrix = torch.Tensor([[-1.0], [1.0]]) / 2.0
@@ -241,6 +244,45 @@ class PLNN(nn.Module):
             working_bounds = F.relu(pre_relus)
 
         return returned_bounds, dead_set
+
+
+    def compute_dual_lp_bounds(self, domain_obj):
+        """ Use KW to actually find the bounds. Uses L_inf bounds to help
+            get better bounds
+        """
+        low_bounds = torch.Tensor(domain_obj.box_low)
+        high_bounds = torch.Tensor(domain_obj.box_high)
+        midpoint = ((low_bounds + high_bounds) / 2.0).view(1, -1)
+        box_bounds = (low_bounds, high_bounds)
+
+        dual_net = ca.DualNetwork(self.net, midpoint, domain_obj.linf_radius,
+                                  box_bounds=box_bounds).dual_net
+
+        bounds, dead_set = [], []
+        for el in dual_net:
+            if isinstance(el, ca.DualReLU):
+                bounds.append(torch.cat((el.zl.view(-1, 1), el.zu.view(-1, 1)),
+                                        dim=1))
+                dead_set.append(~el.I.squeeze())
+
+        return bounds, dead_set
+
+    def compute_dual_ia_bounds(self, domain_obj):
+        """ Use both interval analysis and dual bounds to get best bounds """
+
+        ia = self.compute_interval_bounds(domain_obj)[0]
+        dd = self.compute_dual_lp_bounds(domain_obj)[0]
+
+        bounds = []
+        dead_set = []
+        for i, d in zip(ia, dd):
+            stacked = torch.stack((i, d))
+            new_lows = torch.max(stacked[:, :, 0], dim=0)[0]
+            new_highs = torch.min(stacked[:, :, 1], dim=0)[0]
+            new_bounds = torch.stack((new_lows, new_highs), dim=1)
+            bounds.append(new_bounds)
+            dead_set.append((new_bounds[:, 0] * new_bounds[:, 1]) >= 0)
+        return bounds, dead_set
 
 
 class PLNN_seq(PLNN):

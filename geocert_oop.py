@@ -210,6 +210,7 @@ class IncrementalGeoCert(object):
         self._reset_state()
 
 
+
     def _reset_state(self):
         """ Clears out the state of things that get set in a min_dist run """
         # Things that are saved as instances for a run
@@ -220,7 +221,7 @@ class IncrementalGeoCert(object):
         self.pq = [] # Priority queue that contains HeapElements
         self.dead_constraints = [None] # wrapped in a dynamic object
         self.domain = None # keeps track of domain and upper bounds
-
+        self.config_history = None # keeps track of all seen polytope configs
 
     def _verbose_print(self, *args):
         """ Print method that leverages self.verbose -- makes code cleaner """
@@ -278,7 +279,7 @@ class IncrementalGeoCert(object):
         pgd_attack = aa.PGD(self.net, normalizer, linf_threat, loss_fxn,
                             manual_gpu=False)
         attack_kwargs = {'num_iterations': 1000,
-                         'random_init': 0.25,
+                         'random_init': 0.4,
                          'signed': False,
                          'verbose': False}
 
@@ -322,24 +323,22 @@ class IncrementalGeoCert(object):
         max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
         best_adv = success_out['adversarials'][max_idx].squeeze()
 
+        # Set both l_inf and l_2 upper bounds
+        l_inf_upper_bound = (best_adv - x.view(-1)).abs().max().item()
+        self.domain.set_l_inf_upper_bound(l_inf_upper_bound)
+        l_2_upper_bound = torch.norm(best_adv - x.view(-1), p=2).item()
+        self.domain.set_l_2_upper_bound(l_2_upper_bound)
 
-
-        if self.lp_norm == 'l_inf':
-            upper_bound = (best_adv - x.view(-1)).abs().max().item()
-        elif self.lp_norm == 'l_2':
-            upper_bound = torch.norm(best_adv - x.view(-1), p=2).item()
-
-        {'l_inf': self.domain.set_l_inf_upper_bound,
-          'l_2': self.domain.set_l_2_upper_bound}[lp_norm](upper_bound)
+        upper_bound = {'l_inf': l_inf_upper_bound,
+                       'l_2': l_2_upper_bound}[self.lp_norm]
 
         return upper_bound, best_adv
 
 
     def _update_dead_constraints(self):
-        full_dead_constraints = self.net.compute_interval_bounds(self.domain)
-        tensor_dead_constraints = full_dead_constraints[1]
+        bounds = self.net.compute_dual_ia_bounds(self.domain)
+        tensor_dead_constraints = bounds[1]
         self.dead_constraints = utils.cat_config(tensor_dead_constraints)
-
 
 
     def _update_step(self, poly, popped_facet):
@@ -362,7 +361,8 @@ class IncrementalGeoCert(object):
         # Compute polytope boundaries, rejecting where we can
         new_facets, rejects = self.facet_config_fxn(poly,
                                               self.seen_to_polytope_map)
-        self._verbose_print("Num facets: ", len(new_facets))
+        initial_len = len(new_facets)
+        #self._verbose_print("Num facets: ", len(new_facets))
         self._verbose_print("REJECT DICT: ", rejects)
 
         # Compute adversarial facets, rejecting where we can
@@ -375,7 +375,6 @@ class IncrementalGeoCert(object):
         chained_facets = itertools.chain(new_facets, adv_constraints)
         parallel_args = [(_, self.x) for _ in chained_facets]
         dist_fxn = lambda el: (el[0], self.lp_dist(*el))
-        self._verbose_print("NEW FACETS", len(parallel_args))
 
 
         if (len(parallel_args) > 1 and
@@ -394,6 +393,7 @@ class IncrementalGeoCert(object):
         #   With distances in hand, make HeapElements                        #
         ######################################################################
         current_upper_bound = self.domain.current_upper_bound(self.lp_norm)
+        num_pushed = 0
         for facet, (dist, proj) in outputs:
             if dist is None:
                 continue
@@ -407,14 +407,25 @@ class IncrementalGeoCert(object):
                 dist < current_upper_bound):
                 # If feasible and worth considering push onto heap
                 heapq.heappush(self.pq, heap_el)
-
+                num_pushed += 1
 
                 if facet.facet_type == 'decision':
                     # If also a decision bound, update the upper bound/domain
                     self.domain.set_upper_bound(dist, self.lp_norm)
+                    # Update l_inf bound in l_2 case anyway
+                    if self.lp_norm == 'l_2':
+                        xnp = np.array(self.x.squeeze())
+                        new_linf = abs(proj - xnp).max()
+                        self.domain.set_upper_bound(new_linf, 'l_inf')
+
                     current_upper_bound =\
                                    self.domain.current_upper_bound(self.lp_norm)
+
+
+
                     self._update_dead_constraints()
+        print("Pushed %s/%s facets" % (num_pushed, initial_len))
+
 
         # Mark that we've handled this polytope
         poly_config = utils.flatten_config(poly.config)
@@ -481,7 +492,6 @@ class IncrementalGeoCert(object):
         index = 0
         prev_min_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
         while True:
-            min_el_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound():
@@ -489,9 +499,7 @@ class IncrementalGeoCert(object):
             # Otherwise, open up a new polytope and explore
             else:
                 prev_min_dist = pop_el.lp_dist
-                self._verbose_print('---Opening New Polytope---')
-                self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
-                                     getattr(self.domain, upper_bound_attr))
+
                 popped_facet = pop_el.facet
                 configs = popped_facet.get_new_configs()
                 configs_flat = utils.flatten_config(configs)
@@ -499,6 +507,9 @@ class IncrementalGeoCert(object):
 
                 # If polytope has already been seen, don't add it again
                 if configs_flat not in self.seen_to_polytope_map:
+                    self._verbose_print('---Opening New Polytope---')
+                    self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
+                                     getattr(self.domain, upper_bound_attr))
                     new_poly_dict = self.net.compute_polytope_config(configs,
                                                                      False)
                     new_poly = Polytope.from_polytope_dict(new_poly_dict,
@@ -506,7 +517,8 @@ class IncrementalGeoCert(object):
                                          dead_constraints=self.dead_constraints)
                     self._update_step(new_poly, pop_el)
                 else:
-                    self._verbose_print("We've already seen that polytope")
+                    pass
+                    #self._verbose_print("We've already seen that polytope")
 
             if index % 1 == 0 and self.display:
                 self.plot_2d(pop_el.lp_dist, iter=index)
