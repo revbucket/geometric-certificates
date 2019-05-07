@@ -342,9 +342,10 @@ class Polytope(object):
     def is_point_feasible(self, x):
         """ Returns True if point X satisifies all constraints, false otherwise
         """
-        lhs = np.matmul(self.ub_A, x)
-        bools = [lhs.reshape((lhs.size,)) <= self.ub_b][0]
-        return all(bools)
+        lhs = np.matmul(self.ub_A, x).reshape((np.shape(self.ub_A)[0],))
+        less_than = [lhs <= self.ub_b][0]
+        _, fuzzy_equal = utils.fuzzy_vector_equal_plus(lhs, self.ub_b)
+        return all(less_than | fuzzy_equal)
 
     def is_point_fesible_plus(self, x):
         """ Same as above, but also returns extra information
@@ -443,7 +444,6 @@ class Polytope(object):
         for face in potent_faces:
             project = np.matmul(P.T, face.ub_A[face.tight_list].T)
             project = project/np.linalg.norm(np.matmul(P.T, face.ub_A[face.tight_list].T))
-
 
     def to_comparison_form(self, copy=False):
         """ Converts this A,b into comparison form. If copy is true, returns a
