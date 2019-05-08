@@ -39,6 +39,30 @@ class Domain(object):
         self.unmodified_bounds_low = None
         self.unmodified_bounds_high = None
 
+    def asdict(self):
+        return {'dimension':                self.dimension,
+                'x':                        self.x,
+                'box_low':                  self.box_low,
+                'box_high':                 self.box_high,
+                'l2_radius':                self.l2_radius,
+                'linf_radius':              self.linf_radius,
+                'original_box_low':         self.original_box_low,
+                'original_box_high':        self.original_box_high,
+                'unmodified_bounds_low':    self.unmodified_bounds_low,
+                'unmodified_bounds_high':   self.unmodified_bounds_high}
+
+    @classmethod
+    def from_dict(cls, saved_dict):
+        domain = cls(saved_dict['dimension'], saved_dict['x'])
+
+        for s in ['box_low', 'box_high', 'l2_radius', 'linf_radius',
+                  'original_box_low', 'original_box_high',
+                  'unmodified_bounds_low',  'unmodified_bounds_high']:
+            setattr(domain, s, saved_dict[s])
+
+        return domain
+
+
     ###########################################################################
     #                                                                         #
     #                   FORWARD FACING METHODS                                #

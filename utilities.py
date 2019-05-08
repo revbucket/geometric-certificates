@@ -5,13 +5,20 @@ from bitstring import BitArray
 import polytope as ptope
 import matplotlib.patches as patches
 import pulp as plp
-
+import copy
 
 ##########################################################################
 #                                                                        #
 #                   NEURAL CONFIG UTILITIES                              #
 #                                                                        #
 ##########################################################################
+
+def get_new_configs(old_configs, tight_index):
+    flip_i, flip_j = index_to_config_coord(old_configs, tight_index)
+    new_configs = copy.deepcopy(old_configs)
+    new_configs[flip_i][flip_j] = int(1 - new_configs[flip_i][flip_j])
+    return new_configs
+
 
 def config_hamming_distance(config1, config2):
     """ Given two configs (as a list of floattensors, where all elements are
