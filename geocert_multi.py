@@ -27,6 +27,13 @@ from dataclasses import dataclass, field
 from queue import PriorityQueue
 import multiprocessing as mp
 
+from dataclasses import dataclass, field
+from typing import Any
+from multiprocessing.managers import SyncManager
+from threading import Thread
+
+
+
 ##############################################################################
 #                                                                            #
 #                               BATCHED GEOCERT                              #
@@ -171,6 +178,18 @@ class HeapElement(object):
     def domain_bound(self):
         return self.facet_type == 'domain'
 
+    def convert_to_PQElement(self, *args):
+
+        pq_el = PQElement()
+        convert_dict = {'priority': self.lp_dist,
+                        'config': self.facet.config,
+                        'tight_constraint': self.facet.tight_list[0],
+                        'facet_type': self.facet.facet_type,
+                        'projection': self.projection}
+        for k, v in convert_dict.items():
+            setattr(pq_el, k, v)
+        return pq_el
+
 
 class PQElement:
     priority: float # IS THE LP DIST
@@ -179,11 +198,16 @@ class PQElement:
     facet_type: Any=field(compare=False) # is decision or nah?
     projection: Any=field(compare=False)
 
+    def __lt__(self, other):
+        return self.priority < other.priority
 
-class PQManager(mp.SyncManager):
+
+
+
+class PQManager(SyncManager):
     pass
 
-PQManager.register("Priority Queue", PriorityQueue)
+PQManager.register("PriorityQueue", PriorityQueue)
 
 
 
@@ -602,7 +626,9 @@ class IncrementalGeoCertMultiProc(object):
         assert lp_norm in ['l_2', 'l_inf']
         self.lp_norm = lp_norm
         self.x = x
-        self.true_label = int(self.net(x).max(1)[1].item()) # classifier(x)
+
+        print()
+        self.true_label = int(self.net(torch.Tensor(x)).max(1)[1].item())
         self.lp_dist = {'l_2': Face.l2_dist,
                         'l_inf': Face.linf_dist}[self.lp_norm]
         self.domain = Domain(x.numel(), x)
@@ -627,7 +653,7 @@ class IncrementalGeoCertMultiProc(object):
         # Set up the priorityqueue
         pq_manager = PQManager()
         pq_manager.start()
-        pq = pq_manager.PriorityQueue()
+        sync_pq = pq_manager.PriorityQueue()
 
         pq_decision_bounds = pq_manager.PriorityQueue()
 
@@ -637,8 +663,9 @@ class IncrementalGeoCertMultiProc(object):
 
         # Set up heuristic dicts
         heuristic_dict = manager.dict()
-        heuristic_dict['domain'] = self.domain.asdict()
+        heuristic_dict['domain'] = self.domain
         heuristic_dict['dead_constraints'] = self.dead_constraints
+
 
         # Set up domain updater queue
         domain_update_queue = mp.Queue()
@@ -653,14 +680,28 @@ class IncrementalGeoCertMultiProc(object):
         p_0 = Polytope.from_polytope_dict(p_0_dict,
                                          domain=self.domain,
                                          dead_constraints=self.dead_constraints)
-        # FIX THIS
         self._update_step(p_0, None)
 
+        # and update the shared stuff
+        # (i)  take stuff from the pq and put onto the process safe pq
+        for el in self.pq:
+            pq_el = el.convert_to_PQElement()
+            sync_pq.put(pq_el)
+
+        # (ii) update the heuristic dict
+        heuristic_dict['domain'] = self.domain
+        heuristic_dict['dead_constraints'] = self.dead_constraints
+
+        # (iii) update the seen polytopes
+        for k in self.seen_to_polytope_map.keys():
+            seen_polytopes[k] = True
 
         ######################################################################
         #   Step 3: Setup threads and start looping                          #
         ######################################################################
 
+
+        '''
         update_processes = [mp.Process(target=update_step_worker,
                                        args=(self.net, self.x, self.true_label,
                                              pq, seen_polytopes, heuristic_dict,
@@ -675,6 +716,29 @@ class IncrementalGeoCertMultiProc(object):
 
         for proc in itertools.chain(update_processes, [domain_queue_process]):
             proc.join()
+        '''
+
+
+        update_procs = [mp.Process(target=update_step_worker,
+                                 args=(self.net, self.x, self.true_label,
+                                 sync_pq, seen_polytopes, heuristic_dict,
+                                 self.lp_norm, domain_update_queue,
+                                 pq_decision_bounds)) for i in range(num_proc)]
+
+
+        dq_proc = mp.Process(target=domain_queue_updater,
+                          args=(self.net, heuristic_dict, domain_update_queue))
+        [_.start() for _ in update_procs]
+        dq_proc.start()
+        # update_step_worker(self.net, self.x, self.true_label, sync_pq,
+        #                    seen_polytopes, heuristic_dict, self.lp_norm,
+        #                    domain_update_queue, pq_decision_bounds)
+
+
+        [_.join() for _ in update_procs]
+        print("DONE WITH LOOP. WAITING FOR DOMAIN QUEUE UPDATER TO FINISH")
+        dq_proc.join()
+        print("DONE WITH DOMAIN QUEUEU UPDATER")
 
         ######################################################################
         #   Step 4: Collect the best thing in the decision queue and return  #
@@ -682,12 +746,12 @@ class IncrementalGeoCertMultiProc(object):
 
         best_decision_bound = pq_decision_bounds.get()
         best_dist = best_decision_bound.priority
-        best_example = best_decision_bound.proj
+        best_example = best_decision_bound.projection
         return best_dist, adv_bound, adv_ex, best_example
 
 
 def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
-                       dead_neurons, domain_dict, lp_norm, domain_update_queue,
+                       heuristic_dict, lp_norm, domain_update_queue,
                        pq_decision_bounds):
     """ Setup for the worker objects
     ARGS:
@@ -698,11 +762,11 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
     # with everything set up, LFGD
     while True:
         output = update_step_loop(piecewise_net, x, true_label, pqueue,
-                                  seen_polytopes, dead_neurons, domain_dict,
+                                  seen_polytopes, heuristic_dict,
                                   lp_norm, domain_update_queue,
                                   pq_decision_bounds)
-        if output is False: # Termination condition
-            return
+        if output is not True: # Termination condition
+            return output
 
 
 
@@ -717,43 +781,47 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
     #   Step 1: pop something off the queue                                  #
     ##########################################################################
     item = pqueue.get()
+    print("ITEM", item.priority)
     if item.priority < 0: # Termination condition -- bubble up the termination
         return False
-    if facet.type == 'decision': # Termination condition -- bubble up
+    if item.facet_type == 'decision': # Termination condition -- bubble up
         for i in range(100): # Just flood the pq with -1's later
-            pqueue.put(PQElement(priority=-1))
+            stop_pq_el = PQElement()
+            stop_pq_el.priority = -1
+            pqueue.put(stop_pq_el)
             domain_update_queue.put(None)
             pq_decision_bounds.put(item)
-            return Falsep
+        return False
 
 
     config = item.config
     tight_constraint = item.tight_constraint
-    facet_type = item.facet_type
 
-
-    if config in seen_polytopes:
+    new_configs = utils.get_new_configs(config, tight_constraint)
+    print("HASH CONFIG", hash(utils.flatten_config(new_configs)))
+    if utils.flatten_config(new_configs) in seen_polytopes:
         return True # No need to go further, but don't terminate!
+    else:
+        seen_polytopes[utils.flatten_config(new_configs)] = True
 
     ##########################################################################
     #   Step 2: Gather the domain and dead neurons                           #
     ##########################################################################
 
-    domain = Domain.from_dict(heuristic_dict['domain'])
+    domain = heuristic_dict['domain']
+    assert isinstance(domain, Domain)
     dead_constraints = heuristic_dict['dead_constraints']
 
     ##########################################################################
     #   Step 3: Generate facets and do fast rejects                          #
     ##########################################################################
 
-    new_configs = utils.get_new_configs(config, tight_constraint)
 
     new_poly_dict = piecewise_net.compute_polytope_config(new_configs, False)
     new_poly = Polytope.from_polytope_dict(new_poly_dict,
                                            domain=domain,
                                            dead_constraints=dead_constraints)
-    new_facets, rejects = new_poly.generate_facets_configs_parallel(new_poly,
-                                                                seen_polytopes)
+    new_facets, rejects = new_poly.generate_facets_configs_parallel(seen_polytopes)
     initial_len = len(new_facets)
 
     adv_constraints = piecewise_net.make_adversarial_constraints(new_configs,
@@ -779,11 +847,13 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
     for facet, (dist, proj) in outputs:
         if dist is None or dist > current_upper_bound:  #
             continue
-
-        new_pq_element = PQElement(priority=dist,
-                                   config=new_configs,
-                                   tight_constraint=facet.tight_list[0],
-                                   projection=proj)
+        new_pq_element = PQElement()
+        for k, v in {'priority': dist,
+                     'config': new_configs,
+                     'tight_constraint': facet.tight_list[0],
+                     'projection': proj,
+                     'facet_type': facet.facet_type}.items():
+            setattr(new_pq_element, k, v)
         pq_elements_to_push.append(new_pq_element)
 
         if facet.facet_type == 'decision':
@@ -808,11 +878,9 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
 
     # -- push domain to be handled by a separate thread
     if updated_domain:
-        new_domain = domain.asdict()
-        domain_update_queue.put(new_domain)
+        domain_update_queue.put(domain)
 
-    # -- update seen dict
-    seen_polytopes[utils.flatten_config(new_configs)] = True
+
 
     return True
 
@@ -821,25 +889,23 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
 def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue):
     """ Separate thread to handle updating the domain/dead constraints """
 
-    domain = Domain.from_dict(heuristic_dict['domain'])
+    domain = heuristic_dict['domain']
     while True:
-        item = domain_update_queue.get()
-        if item == None:
+        new_domain = domain_update_queue.get()
+        if new_domain == None:
             break
 
         # Update the current domain and change the heuristic dict
-        new_domain = Domain.from_dict(item)
 
-        domain.set_hyperbox_bound(domain, new_domain.box_low,
-                                          new_domain.box_high)
+        domain.set_hyperbox_bound(new_domain.box_low,
+                                  new_domain.box_high)
 
-        domain.set_l_inf_upper_bound(new_domain.l_inf_upper_bound)
-        domain.set_l_2_upper_bound(new_domain.l_2_upper_bound)
-        domain_dict = domain.as_dict()
-        heuristic_dict['domain'] = domain_dict
+        domain.set_l_inf_upper_bound(new_domain.linf_radius)
+        domain.set_l_2_upper_bound(new_domain.l2_radius)
+        heuristic_dict['domain'] = domain
 
         # And use the domain to compute the new dead constraints
         dead_constraints = piecewise_net.compute_dual_ia_bounds(domain)[1]
-        heuristic_dict['dead_constraints'] = dead_constraints
+        heuristic_dict['dead_constraints'] = utils.cat_config(dead_constraints)
 
 
