@@ -39,7 +39,7 @@ class Domain(object):
         self.unmodified_bounds_low = None
         self.unmodified_bounds_high = None
 
-    def asdict(self):
+    def as_dict(self):
         return {'dimension':                self.dimension,
                 'x':                        self.x,
                 'box_low':                  self.box_low,
@@ -102,6 +102,8 @@ class Domain(object):
         self._add_box_constraint(self.x - bound, self.x + bound)
 
     def set_l_2_upper_bound(self, bound):
+        if bound is None:
+            return
         assert self.x is not None
         self.l2_radius = bound
         # also update box constraints if we can
