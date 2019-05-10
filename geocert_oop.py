@@ -573,6 +573,10 @@ class IncrementalGeoCert(object):
 
 
 
+        self.domain.set_l_inf_upper_bound(dist_to_count)
+        if self.lp_norm == 'l_2':
+            self.domain.set_l_2_upper_bound(dist_to_count)
+
         if compute_upper_bound is not False:
             raise Exception("DONT DO THIS")
             adv_bound, adv_ex = self._compute_upper_bounds(x, self.true_label,
