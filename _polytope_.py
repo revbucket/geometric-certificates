@@ -1043,7 +1043,7 @@ class Face(Polytope):
         start = time.time()
         cvxopt_out = solvers.lp(c, ub_a, ub_b, A=a_eq, b=b_eq, solver='mosek')
         end = time.time()
-        print("LP SOLVED IN %.03f" % (end -start))
+        #print("LP SOLVED IN %.03f" % (end -start))
 
         if cvxopt_out['status'] == 'optimal':
             return cvxopt_out['primal objective'], \

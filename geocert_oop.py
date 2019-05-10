@@ -366,13 +366,13 @@ class IncrementalGeoCert(object):
         self._verbose_print("REJECT DICT: ", rejects)
 
         # Compute adversarial facets, rejecting where we can
-        adv_constraints = self.net.make_adversarial_constraints(poly.config,
-                              self.true_label, self.domain)
+        # adv_constraints = self.net.make_adversarial_constraints(poly.config,
+        #                       self.true_label, self.domain)
 
         ######################################################################
         #   Compute min-dists/feasibilities using LP/QP methods              #
         ######################################################################
-        chained_facets = itertools.chain(new_facets, adv_constraints)
+        chained_facets = itertools.chain(new_facets, []) #, adv_constraints)
         parallel_args = [(_, self.x) for _ in chained_facets]
         dist_fxn = lambda el: (el[0], self.lp_dist(*el))
 
@@ -403,11 +403,15 @@ class IncrementalGeoCert(object):
                                       exact_or_estimate='exact')
                 heap_el.projection = proj
 
+
             if (current_upper_bound is None or
                 dist < current_upper_bound):
                 # If feasible and worth considering push onto heap
                 heapq.heappush(self.pq, heap_el)
                 num_pushed += 1
+                continue
+                ################
+
 
                 if facet.facet_type == 'decision':
                     # If also a decision bound, update the upper bound/domain
@@ -531,6 +535,116 @@ class IncrementalGeoCert(object):
         best_example = pop_el.projection
         return pop_el.lp_dist, adv_bound, adv_ex, best_example, pop_el
 
+
+    def count_regions(self, x, dist_to_count,
+                      lp_norm='l_2', compute_upper_bound=False,):
+        """ Returns the minimum distance between x and the decision boundary.
+            Plots things too, I guess...
+
+        ARGS:
+            x - tensor or numpy array of the point we're computing robustness
+                for
+            lp_norm - under which norm we're computing pointwise robustness
+            compute_upper_bound - if False, we don't compute an upper bound
+                                  if True, we compute an upper bound using
+                                  default kwargs. Otherwise, is a dict with
+                                  the kwargs (used for the attack kwargs)
+        """
+
+        ######################################################################
+        #   Step 0: Clear and setup state                                    #
+        ######################################################################
+        self._reset_state() # clear out the state first
+
+        # Computed state
+        assert lp_norm in ['l_2', 'l_inf']
+        self.lp_norm = lp_norm
+        self.x = x
+        self.true_label = int(self.net(x).max(1)[1].item()) # classifier(x)
+        self.lp_dist = {'l_2': Face.l2_dist,
+                        'l_inf': Face.linf_dist}[self.lp_norm]
+        self.domain = Domain(x.numel(), x)
+        if self.hyperbox_bounds is not None:
+            self.domain.set_original_hyperbox_bound(*self.hyperbox_bounds)
+            self._update_dead_constraints()
+
+        upper_bound_attr = {'l_2': 'l2_radius',
+                            'l_inf': 'linf_radius'}[lp_norm]
+
+
+
+        if compute_upper_bound is not False:
+            raise Exception("DONT DO THIS")
+            adv_bound, adv_ex = self._compute_upper_bounds(x, self.true_label,
+                                                           lp_norm,
+                                       extra_attack_kwargs=compute_upper_bound)
+
+
+
+
+
+
+
+        ######################################################################
+        #   Step 1: handle the initial polytope                              #
+        ######################################################################
+        self._verbose_print('---Initial Polytope---')
+        p_0_dict = self.net.compute_polytope(self.x, comparison_form_flag=False)
+
+        p_0 = Polytope.from_polytope_dict(p_0_dict,
+                                         domain=self.domain,
+                                         dead_constraints=self.dead_constraints)
+        self._update_step(p_0, None)
+
+        ######################################################################
+        #   Step 2: Repeat until we hit a decision boundary                  #
+        ######################################################################
+
+        index = 0
+        prev_min_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
+        while True:
+            pop_el = heapq.heappop(self.pq)
+            # If popped el is part of decision boundary, we're done!
+            if pop_el.decision_bound():
+                continue
+
+            if pop_el.lp_dist > dist_to_count:
+                break
+            # Otherwise, open up a new polytope and explore
+            else:
+                prev_min_dist = pop_el.lp_dist
+                popped_facet = pop_el.facet
+                configs = popped_facet.get_new_configs()
+                configs_flat = utils.flatten_config(configs)
+
+
+                # If polytope has already been seen, don't add it again
+                if configs_flat not in self.seen_to_polytope_map:
+                    self._verbose_print('---Opening New Polytope---')
+                    self._verbose_print('Bounds ', pop_el.lp_dist, "  |  ",
+                                     getattr(self.domain, upper_bound_attr))
+                    new_poly_dict = self.net.compute_polytope_config(configs,
+                                                                     False)
+                    new_poly = Polytope.from_polytope_dict(new_poly_dict,
+                                                           domain=self.domain,
+                                         dead_constraints=self.dead_constraints)
+                    self._update_step(new_poly, pop_el)
+                else:
+                    pass
+                    #self._verbose_print("We've already seen that polytope")
+
+            if index % 1 == 0 and self.display:
+                self.plot_2d(pop_el.lp_dist, iter=index)
+            index += 1
+
+        self._verbose_print('----------Minimal Projection Generated----------')
+        self._verbose_print("DIST: ", pop_el.lp_dist)
+        if self.display:
+            self.plot_2d(pop_el.lp_dist, iter=index)
+        best_example = pop_el.projection
+        return list(self.seen_to_polytope_map.keys())
+        #return pop_el.lp_dist, adv_bound, adv_ex, best_example, pop_el,
+        #       len(self.seen_to_polytope_map.keys()
 
     ############################################################################
     #                                                                          #
