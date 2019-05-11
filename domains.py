@@ -9,7 +9,6 @@ import numbers
 import utilities as utils
 import torch
 import torch.nn as nn
-from convex_adversarial.convex_adversarial import DualNetBounds
 import copy
 from cvxopt import solvers, matrix
 
