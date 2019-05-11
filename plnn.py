@@ -8,7 +8,7 @@ import numpy as np
 
 import time
 import copy
-import convex_adversarial.convex_adversarial as ca
+import convex_adversarial as ca
 
 
 
@@ -255,9 +255,7 @@ class PLNN(nn.Module):
         midpoint = ((low_bounds + high_bounds) / 2.0).view(1, -1)
         box_bounds = (low_bounds, high_bounds)
 
-        dual_net = ca.DualNetwork(self.net, midpoint, domain_obj.linf_radius,
-                                  box_bounds=box_bounds).dual_net
-
+        dual_net = ca.DualNetwork(self.net, midpoint, domain_obj.linf_radius,box_bounds=box_bounds).dual_net
         bounds, dead_set = [], []
         for el in dual_net:
             if isinstance(el, ca.DualReLU):

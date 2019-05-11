@@ -311,6 +311,11 @@ class IncrementalGeoCert(object):
         success_out = pert_out.collect_successful(self.net, normalizer,
                                           success_def='alter_top_logit')
         success_idxs = success_out['success_idxs']
+
+        diffs = pert_out.delta.data.index_select(0, success_idxs)
+        max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
+        best_adv = success_out['adversarials'][max_idx].squeeze()
+
         if USE_GPU:
             best_adv = best_adv.cpu()
             labels = labels.cpu()
@@ -318,10 +323,6 @@ class IncrementalGeoCert(object):
 
         if success_idxs.numel() == 0:
             return None, None
-
-        diffs = pert_out.delta.data.index_select(0, success_idxs)
-        max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
-        best_adv = success_out['adversarials'][max_idx].squeeze()
 
         # Set both l_inf and l_2 upper bounds
         l_inf_upper_bound = (best_adv - x.view(-1)).abs().max().item()
