@@ -126,8 +126,8 @@ linf_file= open('linf_counts_DOMAIN.txt', 'w+')
 for i, mb in enumerate(valset):
     for j, ex in enumerate(mb[0]):
         print("--------------------STARTING %02d, %02d" % (i, j))
-        for lp_file, lp_str, bound in [(l2_file, 'l_2', 1.0),
-                            (linf_file, 'l_inf', 0.3)]:
+        for lp_file, lp_str, bound in [(l2_file, 'l_2', 1.5),
+                            (linf_file, 'l_inf', 0.2)]:
 
             try:
                 cert_obj = geo.IncrementalGeoCert(network, config_fxn='parallel',
@@ -138,6 +138,7 @@ for i, mb in enumerate(valset):
                                                 compute_upper_bound=False)
                 lp_file.write(str(output))
                 lp_file.write('\n')
+                lp_file.flush()
             except Exception as err:
                 print("<<<<<<ERROR")
                 print(err)

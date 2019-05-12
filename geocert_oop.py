@@ -404,7 +404,7 @@ class IncrementalGeoCert(object):
                 heap_el.projection = proj
 
 
-            if (current_upper_bound is None or
+            if (True or current_upper_bound is None or
                 dist < current_upper_bound):
                 # If feasible and worth considering push onto heap
                 heapq.heappush(self.pq, heap_el)
@@ -573,9 +573,9 @@ class IncrementalGeoCert(object):
 
 
 
-        self.domain.set_l_inf_upper_bound(dist_to_count)
+        self.domain.set_l_inf_upper_bound(dist_to_count * 2)
         if self.lp_norm == 'l_2':
-            self.domain.set_l_2_upper_bound(dist_to_count)
+            self.domain.set_l_2_upper_bound(dist_to_count * 2)
 
         if compute_upper_bound is not False:
             raise Exception("DONT DO THIS")
@@ -607,6 +607,7 @@ class IncrementalGeoCert(object):
         index = 0
         prev_min_dist = min(self.pq, key=lambda el: el.lp_dist).lp_dist
         while True:
+            print("Len PQ", len(self.pq))
             pop_el = heapq.heappop(self.pq)
             # If popped el is part of decision boundary, we're done!
             if pop_el.decision_bound():
