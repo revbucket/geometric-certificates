@@ -18,7 +18,7 @@ class PLNN(nn.Module):
     """ Simple piecewise neural net.
         Fully connected layers and ReLus only
     """
-    def __init__(self, layer_sizes=None, dtype=torch.FloatTensor):
+    def __init__(self, layer_sizes=None, bias=True, dtype=torch.FloatTensor):
         super(PLNN, self).__init__()
 
         if layer_sizes is None:
@@ -26,6 +26,7 @@ class PLNN(nn.Module):
         self.layer_sizes = layer_sizes
         self.dtype = dtype
         self.fcs = []
+        self.bias = bias
         self.net = self.build_network(layer_sizes)
 
     def build_network(self, layer_sizes):
@@ -34,7 +35,7 @@ class PLNN(nn.Module):
         num = 1
         for size_pair in zip(layer_sizes, layer_sizes[1:]):
             size, next_size = size_pair
-            layer = nn.Linear(size, next_size, bias=True).type(self.dtype)
+            layer = nn.Linear(size, next_size, bias=self.bias).type(self.dtype)
             layers[str(num)] = layer
             self.fcs.append(layer)
             num = num + 1
@@ -208,11 +209,14 @@ class PLNN(nn.Module):
         return self.fcs[-1](x) # No ReLu on the last one
 
 
-    def compute_interval_bounds(self, domain_obj):
+    def compute_interval_bounds(self, domain_obj, on_off_format=False):
         """ For each neuron computes a bound for the range of values each
             pre-ReLU can take.
         ARGS:
             domain_obj : Domain - object used to hold bounding boxes
+            on_off_format: boolean - if True, we return the more fine-grained
+                                     list which displays if neurons are on or
+                                     off, instead of stable
         RETURNS:
             returned_bounds : list of tensors giving pre-Relu bounds
             uncertain_set: list of tensors with 1 if uncertain about this
@@ -234,16 +238,30 @@ class PLNN(nn.Module):
             weight, bias = fc.weight, fc.bias
             midpoint = torch.matmul(working_bounds, midpoint_matrix)
             ranges = torch.matmul(working_bounds, ranges_matrix)
-            new_midpoint = torch.matmul(weight, midpoint) + bias.view(-1, 1)
+            new_midpoint = torch.matmul(weight, midpoint)
+            if bias is not None:
+                new_midpoint = bias.view(-1, 1)
             new_ranges = torch.matmul(torch.abs(weight), ranges)
+
             pre_relus = torch.cat([new_midpoint - new_ranges,
                                    new_midpoint + new_ranges], 1)
-
             dead_set.append((pre_relus[:,0] * pre_relus[:,1]) >= 0)
             returned_bounds.append(pre_relus)
             working_bounds = F.relu(pre_relus)
 
-        return returned_bounds, dead_set
+        if on_off_format is False:
+            return returned_bounds, dead_set
+        else:
+            on_off_list = []
+            for el in returned_bounds:
+                on_off_el = torch.LongTensor(el.shape[0])
+                on_off_el[:] = 0
+                on_off_el[el[:, 1] < 0] = -1
+                on_off_el[el[:, 0] >= 0] = 1
+                on_off_list.append(on_off_el)
+            return on_off_list
+
+
 
 
     def compute_dual_lp_bounds(self, domain_obj):
@@ -281,6 +299,127 @@ class PLNN(nn.Module):
             bounds.append(new_bounds)
             dead_set.append((new_bounds[:, 0] * new_bounds[:, 1]) >= 0)
         return bounds, dead_set
+
+    def fast_lip(self, c_vector, l_q, on_off_neurons):
+        """
+        Pytorch implementation of fast_lip. Might be buggy? Who knows?
+        see : https://arxiv.org/pdf/1804.09699.pdf for details
+
+        INPUTS:
+            c_vector: tensor that multiplies the output vector:
+                      we compute gradient of c^Tf(x)
+            l_q : int - q_norm of lipschitzness that we compute
+                        (is dual norm: e.g. if bounds come from an l_inf box,
+                         this should be 1)
+            on_off_neurons : list of LongTensors (entries in -1, 0 or 1)
+                             corresponding to the set of
+                             (off, uncertain, on, respectively) neurons
+                             inside the domain
+        RETURNS:
+            upper bound on lipschitz constant
+        """
+
+        ######################################################################
+        #   First generate inputs needed by fast_lip algorithm               #
+        ######################################################################
+
+        # --- split off active and uncertain neurons
+        # -1 means off (don't care)
+        #  0 means UNCERTAIN
+        #  1 means ACTIVE
+
+        active_neuron_list, uncertain_neuron_list = [], []
+        for neuron_by_layer in on_off_neurons:
+            active_neuron_list.append((neuron_by_layer == 1))
+            uncertain_neuron_list.append((neuron_by_layer == 0))
+
+        # --- get list of weights, initialize placeholders
+        weights = [layer.weight for layer in self.fcs[:-1]]
+        weights.append(c_vector.matmul(self.fcs[-1].weight).view(1, -1))
+
+        constant_term = weights[0]
+        lowers = [torch.zeros_like(constant_term)]
+        uppers = [torch.zeros_like(constant_term)]
+
+
+        ######################################################################
+        #   Loop through layers using the _bound_layer_grad subroutine       #
+        ######################################################################
+
+        for i in range(len(weights) - 1):
+            subroutine_out = self._bound_layers_grad(constant_term, lowers[-1],
+                                                     uppers[-1],
+                                                     weights[i + 1],
+                                                     active_neuron_list[i],
+                                                     uncertain_neuron_list[i])
+            constant_term, lower, upper = subroutine_out
+            lowers.append(lower)
+            uppers.append(upper)
+
+        ######################################################################
+        #   Finalize and return the output                                   #
+        ######################################################################
+
+        low_bound = (constant_term + lowers[-1]).abs()
+        upp_bound = (constant_term + uppers[-1]).abs()
+
+        layerwise_max = torch.where(low_bound > upp_bound, low_bound, upp_bound)
+        return torch.norm(layerwise_max, p=l_q).item()
+
+
+    def _bound_layers_grad(self, constant_term, lower, upper, weight,
+                           active_neurons, uncertain_neurons):
+        """ Subroutine for fast_lip.
+            Assume weight has shape [m, n]
+
+        ARGS: (let's make sure the types and shapes all mesh)
+            constant_term: floatTensor shape (n, n_0)
+            lower: floatTensor shape (n, n_0)
+            upper: floatTensor shape (n, n_0)
+            weight: floatTensor shape (m, n)
+            active_neurons: torch.Tensor shape (n,)
+            uncertain_neurons: torch.Tensor shape (n,)
+        RETURNS:
+            new constant term, lower, and upper, each with shape (m, n_0)
+        """
+
+        # ASSERTS ON SHAPES FOR DEBUGGING
+        n_0 = self.layer_sizes[0]
+        n = weight.shape[1]
+        assert constant_term.shape == (n, n_0)
+        assert lower.shape == (n, n_0)
+        assert upper.shape == (n, n_0)
+        assert active_neurons.shape == (n,)
+        assert uncertain_neurons.shape == (n,)
+
+
+
+        # Make diagonals and split weights by +/-
+        active_diag = torch.diag(active_neurons).float()
+        uncertain_diag = torch.diag(uncertain_neurons).float()
+        pos_weight, neg_weight = utils.split_tensor_pos(weight)
+
+
+        # Compute the new constant_term
+        new_constant_term = weight.matmul(active_diag).matmul(constant_term)
+
+        # Make new upper bounds/lower bounds
+        cons_low = constant_term + lower
+        _, neg_cons_low = utils.split_tensor_pos(cons_low)
+        cons_upp = constant_term + upper
+        pos_cons_upp, _ = utils.split_tensor_pos(cons_upp)
+
+
+        new_upper = (pos_weight.matmul(active_diag).matmul(upper) +
+                     neg_weight.matmul(active_diag).matmul(lower) +
+                     neg_weight.matmul(uncertain_diag).matmul(neg_cons_low) +
+                     pos_weight.matmul(uncertain_diag).matmul(pos_cons_upp))
+
+        new_lower = (pos_weight.matmul(active_diag).matmul(lower) +
+                     neg_weight.matmul(active_diag).matmul(upper) +
+                     pos_weight.matmul(uncertain_diag).matmul(neg_cons_low) +
+                     neg_weight.matmul(uncertain_diag).matmul(pos_cons_upp))
+        return new_constant_term, new_upper, new_lower
 
 
 class PLNN_seq(PLNN):
