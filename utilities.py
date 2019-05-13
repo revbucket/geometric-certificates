@@ -78,6 +78,15 @@ def index_to_config_coord(config, index):
 
 global_tolerance = 1e-6
 
+
+def split_tensor_pos(tensor):
+    """ Splits tensor into positive and negative terms """
+    pos_tensor = tensor.masked_fill(tensor < 0, 0.0)
+    neg_tensor = tensor - pos_tensor
+
+    return pos_tensor, neg_tensor
+
+
 def comparison_form(A, b, tolerance=global_tolerance):
     """ Given polytope Ax<= b
         Convert each constraint into a_i^Tx <= +-1, 0
