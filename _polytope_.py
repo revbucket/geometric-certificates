@@ -3,9 +3,10 @@ import torch
 import numpy as np
 import scipy.optimize as opt
 from collections import defaultdict
-from mosek import iparam
-import gurobipy as gb 
 
+import gurobipy as gb
+
+from mosek import iparam
 from cvxopt import matrix, solvers
 solvers.options['show_progress'] = False
 solvers.options['mosek'] = {iparam.log: 0,
@@ -32,8 +33,9 @@ class Polytope(object):
     #                                                                    #
     ######################################################################
 
-    def __init__(self, ub_A, ub_b, config=None, interior_point=None,
-                 domain=None, dead_constraints=None, gurobi=True):
+    def __init__(self, ub_A, ub_b, x_np, config=None, interior_point=None,
+                 domain=None, dead_constraints=None, gurobi=True,
+                 linear_map=None):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
         if isinstance(ub_A, torch.Tensor):
@@ -48,19 +50,27 @@ class Polytope(object):
         self.dead_constraints = dead_constraints
         self.gurobi = gurobi
         self.gurobi_model = None
-
+        self.x_np = x_np
+        self.linear_map = linear_map
 
     @classmethod
-    def from_polytope_dict(cls, polytope_dict, domain=None,
+    def from_polytope_dict(cls, polytope_dict, x_np, domain=None,
                            dead_constraints=None,
                            gurobi=True):
         """ Alternate constructor of Polytope object """
+
+        linear_map = {'A': polytope_dict['total_a'].detach().cpu().numpy(),
+                      'b': polytope_dict['total_b'].detach().cpu().numpy()}
+
+
         return cls(polytope_dict['poly_a'],
                    polytope_dict['poly_b'],
+                   x_np,
                    config=polytope_dict['configs'],
                    domain=domain,
-                   dead_constraints=dead_constraints, 
-                   gurobi=True)
+                   dead_constraints=dead_constraints,
+                   gurobi=gurobi,
+                   linear_map=linear_map)
 
 
 
@@ -146,19 +156,27 @@ class Polytope(object):
         potential_facets = new_potential_facets
 
 
-        ######################################################################
-        #   Step 4: Construct the facet objects                              #
-        ######################################################################
-        facets = [self.facet_constructor(idx) for idx in potential_facets]
-
         #####################################################################
-        #   Step 5: Remove all facets that have been seen before            #
+        #   Step 4: Remove all facets that have been seen before            #
         #####################################################################
-        facets_to_check, num_seen = self.scrub_seen_facets(facets, seen_dict)
+        potential_facets, num_seen = self.scrub_seen_idxs(potential_facets,
+                                                          seen_dict)
         if num_seen > 0:
             reject_dict['seen before'] += num_seen
 
-        return facets_to_check, dict(reject_dict)
+        ####################################################################
+        #   Step 5: Set up the Gurobi model for reusable optimization      #
+        ####################################################################
+        self._build_gurobi_model()#indices_to_include=potential_facets)
+
+        ######################################################################
+        #   Step 6: Construct the facet objects                              #
+        ######################################################################
+
+        facets = [self.facet_constructor(idx) for idx in potential_facets]
+        return facets, dict(reject_dict)
+
+
 
 
 
@@ -286,7 +304,7 @@ class Polytope(object):
     ##########################################################################
 
     def _build_gurobi_model(self, indices_to_include=None):
-        """ Builds a gurobi model with all the constraints added (except those 
+        """ Builds a gurobi model with all the constraints added (except those
             specified in indices_to_ignore
         ARGS:
             indices_to_include: if not None, is np.array of indices to include
@@ -294,36 +312,44 @@ class Polytope(object):
         RETURNS:
             None, but modifies self.gurobi_model
         """
-        model = gb.Model() 
+        model = gb.Model()
         dim = self.ub_A.shape[1]
-        # add variables 
+        # add variables
         if self.domain.box_low is not None:
-            lb_i = lambda i: self.domain.box_low[i]
+            try:
+                lo_minus_x = self.domain.box_low - self.x_np
+                lb_i = lambda i: lo_minus_x[i]
+            except Exception as err:
+                print("ERROR HERE")
+                print(self.domain.box_low.__class__)
+                print(self.x_np.__class__)
+                raise err
         else:
             lb_i = lambda i: -gb.GRB.INFINITY
 
         if self.domain.box_high is not None:
-            ub_i = lambda i: self.domain.box_high[i] 
+            hi_minus_x = self.domain.box_high - self.x_np
+            ub_i = lambda i: hi_minus_x[i]
         else:
             ub_i = lambda i: gb.GRB.INFINITY
 
         # --- variables representing 'v' in LP/QP projections
-        v_vars = [model.addVar(lb=lb_i(i), ub=ub_i(i), name='v%s' % i) 
-                  for i in range(n)]
+        v_vars = [model.addVar(lb=lb_i(i), ub=ub_i(i), name='v%s' % i)
+                  for i in range(dim)]
 
         # --- variables representing t for linprogs etc
-        aux_vars
-        aux_vars.append(model.addVar(lb=0, ub=grb.INFINITY, name='t'))
+        aux_vars = []
+        aux_vars.append(model.addVar(lb=0, ub=gb.GRB.INFINITY, name='t'))
 
-        model.update() 
+        model.update()
 
-        # add constraints 
+        # add constraints
         # --- constraints for being in the polytope
-        Ax = self.ub_A.matmul(self.x)
+        Ax = self.ub_A.dot(self.x_np)
         ub_b_minus_Ax = self.ub_b - Ax
         if indices_to_include is not None:
             a_rows = self.ub_A[indices_to_include, :]
-            b_rows = ub_b_minus_Ax[indices_to_include] 
+            b_rows = ub_b_minus_Ax[indices_to_include]
         else:
             a_rows = self.ub_A
             b_rows = ub_b_minus_Ax
@@ -332,16 +358,17 @@ class Polytope(object):
         _ = model.addConstrs(gb.LinExpr(a_rows[i], v_vars) <= b_rows[i]
                              for i in range(m))
 
-        # --- constraints for being in the domain 
-        if self.domain.box_low is not None: 
-            x_minus_lo = self.x - self.domain.box_low
-            _ = model.addConstrs(v_vars[i] <= x_minus_lo[i] for i in range(n))
-        if self.domain.box_high is not None:
-            hi_minus_x = self.domain.box_high - self.x
-            _ = model.addConstrs(v_vars[i] <= hi_minus_x[i] for i in range(n))
+        # --- constraints for being in the domain
+        # if self.domain.box_low is not None:
+        #     x_minus_lo = self.x_np - self.domain.box_low
+        #     _ = model.addConstrs(v_vars[i] <= x_minus_lo[i] for i in range(dim))
+        # if self.domain.box_high is not None:
+        #     hi_minus_x = self.domain.box_high - self.x_np
+        #     _ = model.addConstrs(v_vars[i] <= hi_minus_x[i] for i in range(dim))
 
-        model.update() 
+        model.update()
 
+        model.setParam('OutputFlag', False)
         self.gurobi_model = model
 
 
@@ -358,9 +385,15 @@ class Polytope(object):
         return (self.dead_constraints is not None and
                 self.dead_constraints[i])
 
-    def facet_constructor(self, tight_idx):
+
+    def facet_constructor(self, tight_idx, facet_type='facet',
+                          extra_tightness=None):
+
         return Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
-                     domain=self.domain, facet_type='facet')
+                     domain=self.domain, facet_type=facet_type, x_np=self.x_np,
+                     extra_tightness=extra_tightness,
+                     gurobi_model=self.gurobi_model)
+
 
     def facet_feasibility_check(self, tight_idx, facet=None):
         """ Checks if a particular facet (with specified tight_idx) is feasible
@@ -378,6 +411,23 @@ class Polytope(object):
             return (False, 'not-facet')
 
         return (True, facet)
+
+    def scrub_seen_idxs(self, idx_list, seen_dict):
+        """ Removes facets we've seen before, where idx_list is which idx is
+            tight
+        """
+        output_idxs, num_seen_before = [], 0
+        for idx in idx_list:
+            flip_i, flip_j = utils.index_to_config_coord(self.config, idx)
+            new_configs = copy.deepcopy(self.config)
+            new_configs[flip_i][flip_j] = int(1 - new_configs[flip_i][flip_j])
+            new_flat = utils.flatten_config(new_configs)
+            if new_flat in seen_dict:
+                num_seen_before += 1
+            else:
+                output_idxs.append(idx)
+
+        return output_idxs, num_seen_before
 
 
     def scrub_seen_facets(self, facet_list, seen_dict):
@@ -831,13 +881,20 @@ class Polytope(object):
 
 
 class Face(Polytope):
-    def __init__(self, poly_a, poly_b, tight_list, config=None,
+    def __init__(self, poly_a, poly_b, tight_list, x_np, config=None,
                  domain=None, dead_constraints=None, removal_list=None,
-                 facet_type=None, gurobi_model=None):
-        super(Face, self).__init__(poly_a, poly_b, config=config, domain=domain,
+                 facet_type=None, gurobi_model=None, extra_tightness=None):
+        super(Face, self).__init__(poly_a, poly_b, x_np, config=config,
+                                   domain=domain,
                                    dead_constraints=dead_constraints)
-        self.a_eq = self.ub_A[tight_list]
-        self.b_eq = self.ub_b[tight_list]
+
+        if tight_list[0] is None:
+            assert extra_tightness is not None
+            self.a_eq = extra_tightness['A'].reshape((1, -1))
+            self.b_eq = extra_tightness['b']
+        else:
+            self.a_eq = self.ub_A[tight_list]
+            self.b_eq = self.ub_b[tight_list]
         self.tight_list = tight_list
         self.is_feasible = None
         self.is_facet = None
@@ -848,6 +905,7 @@ class Face(Polytope):
         self.facet_type = facet_type
 
         self.gurobi_model = gurobi_model
+        self.extra_tightness = extra_tightness
 
 
     def check_feasible(self):
@@ -966,64 +1024,85 @@ class Face(Polytope):
             False if we can for sure reject this
         """
         domain = self.domain
-        # Do checks to see if this hyperplane intersects domain
-        domain_feasible = domain.feasible_facets(self.ub_A, self.ub_b,
-                                               indices_to_check=self.tight_list)
 
+        if self.tight_list[0] is None: # adversarial constraint here
+            dec_A = self.extra_tightness['A']
+            dec_b = self.extra_tightness['b']
+            A = np.vstack((self.ub_A, dec_A.reshape(1, -1)))
+            b = np.hstack((self.ub_b, dec_b))
+            checklist = [A.shape[0] - 1]
+        else: # regular facet here
+            A = self.ub_A
+            b = self.ub_b
+            checklist = self.tight_list
+
+        domain_feasible = domain.feasible_facets(A, b, checklist)
         if len(domain_feasible) == 0:
             return False
 
         # Do checks to see if this hyperplane has projection inside ball
-        projection = domain.minimal_facet_projections(self.ub_A, self.ub_b,
-                                               indices_to_check=self.tight_list)
+        projection = domain.minimal_facet_projections(A, b, checklist)
+
         return len(projection) > 0
 
 
     def linf_dist_gurobi(self, x):
-        """ Computes the l_infinity distance to point x using gurobi 
+        """ Computes the l_infinity distance to point x using gurobi
         """
-        n = self.ub_A.shape[1]
-        # First do a hacky check to see if this model has already had LP setup 
-        try:
-            self.gurobi_model.getVarByName('linf_dist_setup')
-        except gb.GurobiError:
+        v_vars = [v for v in self.gurobi_model.getVars()
+                  if v.VarName.startswith('v')]
+        # First do a hacky check to see if this model has already had LP setup
+        if self.gurobi_model.getVarByName('linf_dist_setup') is None:
             # If hasn't been set up yet, set up the general LP constraints
             self.gurobi_model.addVar(lb=0, ub=0, name='linf_dist_setup')
 
             # --- add -t<= v_i <= t
             t = self.gurobi_model.getVarByName('t')
-            for i in range(n):
-                v_i = self.gurobi_model.getVarByName('v%s' % i)
-
-                self.gurobi_model.addConstr(-t <= v_i)
-                self.gurobi_model.addConstr(v_i <= t)
+            for v_var in v_vars:
+                self.gurobi_model.addConstr(-t <= v_var)
+                self.gurobi_model.addConstr(v_var <= t)
 
             # --- add t <= upper_bound
             self.gurobi_model.addConstr(t <= self.domain.linf_radius)
 
-            # --- add objective 
+            # --- add objective
             self.gurobi_model.setObjective(t, gb.GRB.MINIMIZE)
             self.gurobi_model.update()
+
 
         # Now we can remove any equality constraints already set
         try:
             self.gurobi_model.remove(self.gurobi_model.getConstrByName('facet'))
             self.gurobi_model.update()
         except gb.GurobiError:
-            pass 
+            pass
 
-        # Add the new equality constraint 
-        tight_row = self.ub_A[self.tight_list[0], :]
-        tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x)
-        v_vars = [var for var in model.getVars() if var.name.startswith('v')]
-        self.gurobi_model.addConstr(gb.quicksum(v_vars) <= tight_b, 
+        # Add the new equality constraint
+        if self.facet_type == 'facet':
+            tight_row = self.ub_A[self.tight_list[0], :]
+            tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x_np)
+        elif self.facet_type == 'decision':
+            tight_row = self.extra_tightness['A']
+            tight_b = self.extra_tightness['b'] - tight_row.dot(self.x_np)
+
+        self.gurobi_model.addConstr(gb.LinExpr(tight_row, v_vars) == tight_b,
                                     name='facet')
 
-        # And solve and return the value, output 
+        # And solve and return the value, output
         self.gurobi_model.update()
-        self.gurobi_model.optimize() 
+        self.gurobi_model.optimize()
 
-        # ??? Handle infeasible case here 
+        if self.gurobi_model.Status == 2: # OPTIMAL STATUS
+            # --- get objective
+            obj_value = self.gurobi_model.getObjective().getValue()
+
+            # --- get variables and add to x
+            opt_point =  self.x_np + np.array([v.X for v in v_vars])
+            return obj_value, opt_point
+
+        else:
+            return None, None
+
 
 
     def linf_dist(self, x):
@@ -1112,8 +1191,8 @@ class Face(Polytope):
             b_constraints.append(constaint_4b)
 
         # Constraint 5 is equality constraint, should have (1, n+1)
-        a_eq = matrix(np.hstack((self.a_eq, np.zeros((1, 1)))))
-        b_eq = matrix(self.b_eq - self.a_eq.dot(x_row))
+        a_eq = matrix(np.hstack((self.a_eq, np.zeros((1,1)))))
+        b_eq = matrix((self.b_eq - self.a_eq.dot(x_row)).astype(np.double))
 
 
 
@@ -1138,7 +1217,7 @@ class Face(Polytope):
         start = time.time()
         cvxopt_out = solvers.lp(c, ub_a, ub_b, A=a_eq, b=b_eq, solver='mosek')
         end = time.time()
-        print("LP SOLVED IN %.03f" % (end -start))
+        # print("LP SOLVED IN %.03f" % (end -start))
 
         if cvxopt_out['status'] == 'optimal':
             return cvxopt_out['primal objective'], \
@@ -1154,30 +1233,44 @@ class Face(Polytope):
     def l2_dist_gurobi(self, x):
         """ Returns the l_2 distance to point x, and projection using Gurobi"""
         n = self.ub_A.shape[1]
-        # Swap out the inequality constraints if any exist 
+        v_vars = [var for var in model.getVars() if var.name.startswith('v')]
+        # Swap out the inequality constraints if any exist
         try:
             self.gurobi_model.remove(self.gurobi_model.getConstrByName('facet'))
-            # if passes, then already set up 
+            # if passes, then already set up
         except:
             # if fails, then not set up yet
             # --- add objective
-            v_vars = [var for var in model.getVars() 
-                      if var.name.startswith('v')]
-            obj_expr = gb.quicksum(_ * _ for _ in v_vars)
+            obj_expr = gb.quicksum(v * v for v in v_vars)
             self.gurobi_model.setObjective(obj_expr, gb.GRB.MINIMIZE)
             self.gurobi_model.update()
 
-        # --- add facet constraint 
-        tight_row = self.ub_A[self.tight_list[0], :]
-        tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x)
-        self.gurobi_model.addConstr(gb.quicksum(v_vars) <= tight_b,
-                                    name='facet')            
+        # --- add facet constraint
+        if self.facet_type == 'facet':
+            tight_row = self.ub_A[self.tight_list[0], :]
+            tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x_np)
+        else:
+            tight_row = self.extra_tightness['A']
+            tight_b = self.extra_tightness['b']
 
-        # Now solve and return value, output 
+        self.gurobi_model.addConstr(gb.LinExpr(tight_row, v_vars) == tight_b,
+                                    name='facet')
+
+        # Now solve and return value, output
         self.gurobi_model.update()
         self.gurobi_model.optimize()
 
-        # ??? Handle infeasible case here 
+        if self.gurobi_model.Status == 2: # OPTIMAL STATUS
+            # --- get objective
+            obj_value = self.gurobi_model.getObjective().getValue()
+
+            # --- get variables and add to x
+            opt_point =  self.x_np + np.array([v.X for v in v_vars])
+            return obj_value, opt_point
+        else:
+            return None, None
+
+
 
 
     def l2_dist(self, x):

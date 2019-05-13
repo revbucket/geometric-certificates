@@ -1,10 +1,8 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from bitstring import BitArray
 import polytope as ptope
 import matplotlib.patches as patches
-import pulp as plp
 import copy
 
 ##########################################################################
@@ -244,7 +242,6 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
 #                                                                        #
 ##########################################################################
 
-from mosek.fusion import *
 
 
 def geometric_mean(M, x, t):
@@ -447,7 +444,6 @@ def gurobi_LP(A_ub, b_ub, a_eq, b_eq, c, bounds=None, options=None):
 #                                                                        #
 ##########################################################################
 
-from mosek.fusion import Expr, Domain, Matrix, Var, Model, ObjectiveSense
 
 
 def geometric_mean(M, x, t):

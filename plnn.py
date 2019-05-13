@@ -85,7 +85,7 @@ class PLNN(nn.Module):
         else:
             return configs
 
-    def make_adversarial_constraints(self, configs, true_label,
+    def make_adversarial_constraints(self, polytope, true_label,
                                      domain):
         """ Given a config computes the linear map in terms of this config
             for all neurons INCLUDING the output neurons (logits) and generates
@@ -96,42 +96,36 @@ class PLNN(nn.Module):
             true_label -
 
         """
-        # Find all adversarial constraints
-        polytope_config = self.compute_polytope_config(configs)
 
-        poly_a = utils.as_numpy(polytope_config['poly_a'])
-        poly_b = utils.as_numpy(polytope_config['poly_b'])
-        total_a = utils.as_numpy(polytope_config['total_a'])
-        total_b = utils.as_numpy(polytope_config['total_b'])
+        # Make all the adversarial_constraints:
+
+        # f(x) = Ax + b (in R^#logits)
+        # adversarial constraints are:
+        #   f_true(x) - f_j(x) = 0 (for all j != true)
+        #  ~ which is ~
+        #   <a_true, x> + b_true - <a_j, x> - b_j = 0
+        #  ~ which is ~
+        # <a_true - a_j, x> = b_j - b_true
 
 
-        num_constraints = poly_a.shape[0]
+        total_a = polytope.linear_map['A']
+        total_b = polytope.linear_map['b']
+
         num_logits = total_a.shape[0]
 
-
-        true_a = total_a[true_label]
-        constraints_a = total_a - true_a
-
-        true_b = total_b[true_label]
-        constraints_b = -1*total_b + true_b
-
-        # Append a row constraint for each of the logits except the true one
         facets = []
-        flat_config = utils.flatten_config(configs)
+        true_a = total_a[true_label]
+        true_b = total_b[true_label]
+
         for i in range(num_logits):
             if i == true_label:
                 continue
-            constraint_a_to_add = constraints_a[i]
-            constraint_b_to_add = constraints_b[i]
-
-            new_facet = Face(np.vstack((poly_a, constraint_a_to_add)),
-                             np.hstack((poly_b, constraint_b_to_add)),
-                             [num_constraints], config=flat_config,
-                             domain=domain, facet_type='decision')
-
+            dec_bound = {'A': true_a - total_a[i],
+                         'b': total_b[i] - true_b}
+            new_facet = polytope.facet_constructor(None, facet_type='decision',
+                                                   extra_tightness=dec_bound)
             if new_facet.fast_domain_check():
                 facets.append(new_facet)
-
         return facets
 
 
