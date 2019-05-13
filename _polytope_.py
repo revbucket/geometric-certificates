@@ -4,7 +4,7 @@ import numpy as np
 import scipy.optimize as opt
 from collections import defaultdict
 from mosek import iparam
-
+import gurobipy as gb 
 
 from cvxopt import matrix, solvers
 solvers.options['show_progress'] = False
@@ -18,7 +18,6 @@ import time
 
 
 ################################################################################
-#                                                                              #
 #                           POLYTOPE CLASS                                     #
 #                                                                              #
 ################################################################################
@@ -34,7 +33,7 @@ class Polytope(object):
     ######################################################################
 
     def __init__(self, ub_A, ub_b, config=None, interior_point=None,
-                 domain=None, dead_constraints=None):
+                 domain=None, dead_constraints=None, gurobi=True):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
         if isinstance(ub_A, torch.Tensor):
@@ -47,17 +46,21 @@ class Polytope(object):
         self.interior_point = interior_point
         self.domain = domain # is a domain object now
         self.dead_constraints = dead_constraints
+        self.gurobi = gurobi
+        self.gurobi_model = None
 
 
     @classmethod
     def from_polytope_dict(cls, polytope_dict, domain=None,
-                           dead_constraints=None):
+                           dead_constraints=None,
+                           gurobi=True):
         """ Alternate constructor of Polytope object """
         return cls(polytope_dict['poly_a'],
                    polytope_dict['poly_b'],
                    config=polytope_dict['configs'],
                    domain=domain,
-                   dead_constraints=dead_constraints)
+                   dead_constraints=dead_constraints, 
+                   gurobi=True)
 
 
 
@@ -282,6 +285,67 @@ class Polytope(object):
     #                                                                        #
     ##########################################################################
 
+    def _build_gurobi_model(self, indices_to_include=None):
+        """ Builds a gurobi model with all the constraints added (except those 
+            specified in indices_to_ignore
+        ARGS:
+            indices_to_include: if not None, is np.array of indices to include
+                                if None, includes all indices
+        RETURNS:
+            None, but modifies self.gurobi_model
+        """
+        model = gb.Model() 
+        dim = self.ub_A.shape[1]
+        # add variables 
+        if self.domain.box_low is not None:
+            lb_i = lambda i: self.domain.box_low[i]
+        else:
+            lb_i = lambda i: -gb.GRB.INFINITY
+
+        if self.domain.box_high is not None:
+            ub_i = lambda i: self.domain.box_high[i] 
+        else:
+            ub_i = lambda i: gb.GRB.INFINITY
+
+        # --- variables representing 'v' in LP/QP projections
+        v_vars = [model.addVar(lb=lb_i(i), ub=ub_i(i), name='v%s' % i) 
+                  for i in range(n)]
+
+        # --- variables representing t for linprogs etc
+        aux_vars
+        aux_vars.append(model.addVar(lb=0, ub=grb.INFINITY, name='t'))
+
+        model.update() 
+
+        # add constraints 
+        # --- constraints for being in the polytope
+        Ax = self.ub_A.matmul(self.x)
+        ub_b_minus_Ax = self.ub_b - Ax
+        if indices_to_include is not None:
+            a_rows = self.ub_A[indices_to_include, :]
+            b_rows = ub_b_minus_Ax[indices_to_include] 
+        else:
+            a_rows = self.ub_A
+            b_rows = ub_b_minus_Ax
+        m = a_rows.shape[0]
+
+        _ = model.addConstrs(gb.LinExpr(a_rows[i], v_vars) <= b_rows[i]
+                             for i in range(m))
+
+        # --- constraints for being in the domain 
+        if self.domain.box_low is not None: 
+            x_minus_lo = self.x - self.domain.box_low
+            _ = model.addConstrs(v_vars[i] <= x_minus_lo[i] for i in range(n))
+        if self.domain.box_high is not None:
+            hi_minus_x = self.domain.box_high - self.x
+            _ = model.addConstrs(v_vars[i] <= hi_minus_x[i] for i in range(n))
+
+        model.update() 
+
+        self.gurobi_model = model
+
+
+
     def _is_dead(self, i):
         """ Just a quick check for deadness of a constraint. We don't need
             to build faces for neurons that we know to be fixed to be on or off
@@ -355,22 +419,6 @@ class Polytope(object):
         bools = [lhs.reshape((lhs.size,)) <= self.ub_b][0]
         return all(bools), bools
 
-
-    def linf_dist(self, x):
-        """ Takes a feasible point x and returns the minimum l_inf distance to
-            a boundary point of the polytope.
-
-            If x is not feasible, return -1
-        """
-
-        # l_inf dist to each polytope is (b_i - a_i^T x) / ||a_i||_1
-        # l_inf dist to all bounds is (b - Ax) * diag(1/||a_i||_1)
-
-        slack = self.ub_b - self.ub_A.matmul(x)
-        norms = np.diag(1.0 / np.linalg.norm(self.ub_A, ord=1, axis=1))
-        dists = slack.matmul(norms)
-        argmin_0 = np.argmin(dists)[0]
-        return dists[argmin_0], argmin_0
 
     def redund_removal_pgd_l2(self, t, x_0):
         ''' Removes redundant constraint based on PGD based upper bound 't'
@@ -785,7 +833,7 @@ class Polytope(object):
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, config=None,
                  domain=None, dead_constraints=None, removal_list=None,
-                 facet_type=None):
+                 facet_type=None, gurobi_model=None):
         super(Face, self).__init__(poly_a, poly_b, config=config, domain=domain,
                                    dead_constraints=dead_constraints)
         self.a_eq = self.ub_A[tight_list]
@@ -799,6 +847,7 @@ class Face(Polytope):
         assert facet_type in [None, 'decision', 'facet']
         self.facet_type = facet_type
 
+        self.gurobi_model = gurobi_model
 
 
     def check_feasible(self):
@@ -930,6 +979,52 @@ class Face(Polytope):
         return len(projection) > 0
 
 
+    def linf_dist_gurobi(self, x):
+        """ Computes the l_infinity distance to point x using gurobi 
+        """
+        n = self.ub_A.shape[1]
+        # First do a hacky check to see if this model has already had LP setup 
+        try:
+            self.gurobi_model.getVarByName('linf_dist_setup')
+        except gb.GurobiError:
+            # If hasn't been set up yet, set up the general LP constraints
+            self.gurobi_model.addVar(lb=0, ub=0, name='linf_dist_setup')
+
+            # --- add -t<= v_i <= t
+            t = self.gurobi_model.getVarByName('t')
+            for i in range(n):
+                v_i = self.gurobi_model.getVarByName('v%s' % i)
+
+                self.gurobi_model.addConstr(-t <= v_i)
+                self.gurobi_model.addConstr(v_i <= t)
+
+            # --- add t <= upper_bound
+            self.gurobi_model.addConstr(t <= self.domain.linf_radius)
+
+            # --- add objective 
+            self.gurobi_model.setObjective(t, gb.GRB.MINIMIZE)
+            self.gurobi_model.update()
+
+        # Now we can remove any equality constraints already set
+        try:
+            self.gurobi_model.remove(self.gurobi_model.getConstrByName('facet'))
+            self.gurobi_model.update()
+        except gb.GurobiError:
+            pass 
+
+        # Add the new equality constraint 
+        tight_row = self.ub_A[self.tight_list[0], :]
+        tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x)
+        v_vars = [var for var in model.getVars() if var.name.startswith('v')]
+        self.gurobi_model.addConstr(gb.quicksum(v_vars) <= tight_b, 
+                                    name='facet')
+
+        # And solve and return the value, output 
+        self.gurobi_model.update()
+        self.gurobi_model.optimize() 
+
+        # ??? Handle infeasible case here 
+
 
     def linf_dist(self, x):
         """ Computes the l_infinity distance to point x using LP
@@ -1055,6 +1150,34 @@ class Face(Polytope):
             print("CVXOPT status", cvxopt_out['status'])
             raise Exception("LINF DIST FAILED?")
 
+
+    def l2_dist_gurobi(self, x):
+        """ Returns the l_2 distance to point x, and projection using Gurobi"""
+        n = self.ub_A.shape[1]
+        # Swap out the inequality constraints if any exist 
+        try:
+            self.gurobi_model.remove(self.gurobi_model.getConstrByName('facet'))
+            # if passes, then already set up 
+        except:
+            # if fails, then not set up yet
+            # --- add objective
+            v_vars = [var for var in model.getVars() 
+                      if var.name.startswith('v')]
+            obj_expr = gb.quicksum(_ * _ for _ in v_vars)
+            self.gurobi_model.setObjective(obj_expr, gb.GRB.MINIMIZE)
+            self.gurobi_model.update()
+
+        # --- add facet constraint 
+        tight_row = self.ub_A[self.tight_list[0], :]
+        tight_b = self.ub_b[self.tight_list[0]] - tight_row.dot(self.x)
+        self.gurobi_model.addConstr(gb.quicksum(v_vars) <= tight_b,
+                                    name='facet')            
+
+        # Now solve and return value, output 
+        self.gurobi_model.update()
+        self.gurobi_model.optimize()
+
+        # ??? Handle infeasible case here 
 
 
     def l2_dist(self, x):
