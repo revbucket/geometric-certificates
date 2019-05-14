@@ -31,7 +31,7 @@ class Polytope(object):
 
     def __init__(self, ub_A, ub_b, x_np, config=None, interior_point=None,
                  domain=None, dead_constraints=None, gurobi=True,
-                 linear_map=None):
+                 linear_map=None, lipschitz_ub=None, c_vector=None):
         """ Polytopes are of the form Ax <= b
             with no strict equality constraints"""
         if isinstance(ub_A, torch.Tensor):
@@ -48,15 +48,19 @@ class Polytope(object):
         self.gurobi_model = None
         self.x_np = x_np
         self.linear_map = linear_map
+        self.lipschitz_ub = lipschitz_ub
+        self.c_vector = utils.as_numpy(c_vector)
 
     @classmethod
     def from_polytope_dict(cls, polytope_dict, x_np, domain=None,
                            dead_constraints=None,
-                           gurobi=True):
+                           gurobi=True,
+                           lipschitz_ub=None,
+                           c_vector=None):
         """ Alternate constructor of Polytope object """
 
-        linear_map = {'A': polytope_dict['total_a'].detach().cpu().numpy(),
-                      'b': polytope_dict['total_b'].detach().cpu().numpy()}
+        linear_map = {'A': utils.as_numpy(polytope_dict['total_a']),
+                      'b': utils.as_numpy(polytope_dict['total_b'])}
 
 
         return cls(polytope_dict['poly_a'],
@@ -66,7 +70,9 @@ class Polytope(object):
                    domain=domain,
                    dead_constraints=dead_constraints,
                    gurobi=gurobi,
-                   linear_map=linear_map)
+                   linear_map=linear_map,
+                   lipschitz_ub=lipschitz_ub,
+                   c_vector=c_vector)
 
 
 
@@ -270,7 +276,10 @@ class Polytope(object):
         return Face(self.ub_A, self.ub_b, [tight_idx], config=self.config,
                      domain=self.domain, facet_type=facet_type, x_np=self.x_np,
                      extra_tightness=extra_tightness,
-                     gurobi_model=self.gurobi_model)
+                     gurobi_model=self.gurobi_model,
+                     linear_map=self.linear_map,
+                     lipschitz_ub=self.lipschitz_ub,
+                     c_vector=self.c_vector)
 
 
 
@@ -303,7 +312,8 @@ class Polytope(object):
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, x_np, config=None,
                  domain=None, dead_constraints=None, removal_list=None,
-                 facet_type=None, gurobi_model=None, extra_tightness=None):
+                 facet_type=None, gurobi_model=None, extra_tightness=None,
+                 linear_map=None, lipschitz_ub=None, c_vector=None):
         super(Face, self).__init__(poly_a, poly_b, x_np, config=config,
                                    domain=domain,
                                    dead_constraints=dead_constraints)
@@ -326,6 +336,10 @@ class Face(Polytope):
 
         self.gurobi_model = gurobi_model
         self.extra_tightness = extra_tightness
+
+        self.linear_map = linear_map
+        self.lipschitz_ub = lipschitz_ub
+        self.c_vector = c_vector
 
 
     def get_new_configs(self):
@@ -403,7 +417,23 @@ class Face(Polytope):
             self.gurobi_model.addConstr(t <= self.domain.linf_radius)
 
             # --- add objective
-            self.gurobi_model.setObjective(t, gb.GRB.MINIMIZE)
+            # --- --- if self.lipschitz_ub is not None, we incorporate this
+            #         objective as follows
+            #
+            if self.lipschitz_ub is None:
+                self.gurobi_model.setObjective(t, gb.GRB.MINIMIZE)
+            else:
+                # --- if self.lipschitz_ub is not None, we incorporate this
+                #     objective as follows
+                # goal is to min_{y in F} ||y - x||_inf + <c, f(y)>/L
+                # which is equivalent to  ||v||_inf + <c, f(v)>/L + <c, f(x)> /L
+                # and <c, f(v)> = <c, Av + b> for A,b in self.linear_map
+                ctA = self.c_vector.dot(self.linear_map['A'])
+                ctA = ctA / self.lipschitz_ub
+                lip_pot = gb.LinExpr(ctA, v_vars)
+                self.gurobi_model.setObjective(t + lip_pot, gb.GRB.MINIMIZE)
+
+
             self.gurobi_model.update()
 
 
@@ -432,7 +462,12 @@ class Face(Polytope):
         if self.gurobi_model.Status == 2: # OPTIMAL STATUS
             # --- get objective
             obj_value = self.gurobi_model.getObjective().getValue()
-
+            if self.lipschitz_ub is not None:
+                cons_term = self.linear_map['A'].dot(self.x_np)
+                cons_term += self.linear_map['b']
+                cons_term = self.c_vector.dot(cons_term) / self.lipschitz_ub
+                #obj_value += cons_term
+            print("OBJ", self.tight_list, obj_value)#, cons_term)
             # --- get variables and add to x
             opt_point =  self.x_np + np.array([v.X for v in v_vars])
             return obj_value, opt_point

@@ -835,6 +835,21 @@ def as_numpy(tensor_or_array):
 #                                                                        #
 ##########################################################################
 
+def dual_norm(lp):
+    """ Returns the dual norm value (as a numeric!) from a (possibly numeric)
+        input
+    """
+    return {'l_2': 2,
+            'l2': 2,
+            'l_inf': 1,
+            'linf': 1,
+            'l_1': float('inf'),
+            'l1': float('inf'),
+            2: 2,
+            float('inf'): 1,
+            1: float('inf')}[lp]
+
+
 def star_arg(fxn):
     """ Maps function taking multiple arguments to function taking a single
         tuple of args
