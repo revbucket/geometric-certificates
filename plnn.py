@@ -346,7 +346,7 @@ class PLNN(nn.Module):
                                                      weights[i + 1],
                                                      active_neuron_list[i],
                                                      uncertain_neuron_list[i])
-            constant_term, lower, upper = subroutine_out
+            constant_term, upper, lower = subroutine_out
             lowers.append(lower)
             uppers.append(upper)
 

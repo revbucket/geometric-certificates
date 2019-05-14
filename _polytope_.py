@@ -466,8 +466,8 @@ class Face(Polytope):
                 cons_term = self.linear_map['A'].dot(self.x_np)
                 cons_term += self.linear_map['b']
                 cons_term = self.c_vector.dot(cons_term) / self.lipschitz_ub
-                #obj_value += cons_term
-            print("OBJ", self.tight_list, obj_value)#, cons_term)
+                obj_value += cons_term
+            # print("OBJ", self.tight_list, obj_value)#, cons_term)
             # --- get variables and add to x
             opt_point =  self.x_np + np.array([v.X for v in v_vars])
             return obj_value, opt_point
