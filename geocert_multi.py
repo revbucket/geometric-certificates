@@ -417,7 +417,7 @@ class IncrementalGeoCertMultiProc(object):
         heuristic_dict['domain'] = self.domain
         heuristic_dict['dead_constraints'] = self.dead_constraints
 
-        if True or (potential == 'lipschitz'):
+        if potential == 'lipschitz':
             # Just assume binary classifiers for now
             assert self.net(x).numel() == 2
             c_vector = torch.Tensor([1.0, -1.0])
@@ -431,8 +431,8 @@ class IncrementalGeoCertMultiProc(object):
             lip_value = None
             c_vector = None
 
-        heuristic_dict['fast_lip'] = None
-        heuristic_dict['c_vector'] = None
+        heuristic_dict['fast_lip'] = lip_value
+        heuristic_dict['c_vector'] = c_vector
 
 
         # Set up domain updater queue
@@ -440,8 +440,9 @@ class IncrementalGeoCertMultiProc(object):
 
         # Start the domain update thread
         dq_thread = Thread(target=domain_queue_updater,
-                           args=(self.net, heuristic_dict, domain_update_queue))
-        #dq_thread.start()
+                           args=(self.net, heuristic_dict, domain_update_queue,
+                                 potential))
+        dq_thread.start()
 
         ######################################################################
         #   Step 2: handle the initial polytope                              #
@@ -489,17 +490,16 @@ class IncrementalGeoCertMultiProc(object):
             [_.join() for _ in procs]
 
         # Stop the domain update thread
-        #dq_thread.join()
+        dq_thread.join()
 
         ######################################################################
         #   Step 4: Collect the best thing in the decision queue and return  #
         ######################################################################
 
-        # TODO: Loop through the best decision bounds here
         best_decision_bound = pq_decision_bounds.get()
         best_dist = best_decision_bound.priority
         best_example = best_decision_bound.projection
-        return best_dist, adv_bound, adv_ex, best_example, ub_time
+        return  best_dist, adv_bound, adv_ex, best_example, ub_time, seen_polytopes
 
 
 
@@ -701,7 +701,8 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
 
 
 
-def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue):
+def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue,
+                         potential):
     """ Separate thread to handle updating the domain/dead constraints """
 
     domain = heuristic_dict['domain']
@@ -722,5 +723,15 @@ def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue):
         # And use the domain to compute the new dead constraints
         dead_constraints = piecewise_net.compute_dual_ia_bounds(domain)[1]
         heuristic_dict['dead_constraints'] = utils.cat_config(dead_constraints)
+
+        # Use the domain to update the lipschitz bound on everything
+        # (this can only shrink as we shrink the domain)
+        if potential == 'lipschitz':
+            # Just assume binary classifiers for now
+            c_vector = heuristic_dict['c_vector']
+            on_off_neurons = piecewise_net.compute_interval_bounds(domain, True)
+            dual_lp = utils.dual_norm(lp_norm)
+            lip_value = piecewise_net.fast_lip(c_vector, dual_lp, on_off_neurons)
+            heuristic_dict['fast_lip'] = lip_value
 
 
