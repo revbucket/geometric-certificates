@@ -357,7 +357,7 @@ class IncrementalGeoCertMultiProc(object):
 
 
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
-                           num_proc=2, optimizer='gurobi'):
+                           num_proc=2, optimizer='gurobi', potential='lp'):
         ######################################################################
         #   Step 0: Clear and setup state                                    #
         ######################################################################
@@ -387,6 +387,10 @@ class IncrementalGeoCertMultiProc(object):
         if optimizer == 'mosek' and num_proc > 1:
             raise Exception("Multiprocessing doesn't work with mosek!")
 
+        assert potential in ['lp', 'lipschitz']
+
+
+        # Compute upper bound
         adv_bound, adv_ex, ub_time = None, None, None
         if compute_upper_bound is not False:
             ub_out = self._compute_upper_bounds(x, self.true_label, lp_norm,
@@ -413,6 +417,23 @@ class IncrementalGeoCertMultiProc(object):
         heuristic_dict['domain'] = self.domain
         heuristic_dict['dead_constraints'] = self.dead_constraints
 
+        if True or (potential == 'lipschitz'):
+            # Just assume binary classifiers for now
+            assert self.net(x).numel() == 2
+            c_vector = torch.Tensor([1.0, -1.0])
+            if self.true_label == 1:
+                c_vector = c_vector * -1
+            on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
+
+            dual_lp = utils.dual_norm(lp_norm)
+            lip_value = self.net.fast_lip(c_vector, dual_lp, on_off_neurons)
+        else:
+            lip_value = None
+            c_vector = None
+
+        heuristic_dict['fast_lip'] = None
+        heuristic_dict['c_vector'] = None
+
 
         # Set up domain updater queue
         domain_update_queue = mp.Queue()
@@ -420,7 +441,7 @@ class IncrementalGeoCertMultiProc(object):
         # Start the domain update thread
         dq_thread = Thread(target=domain_queue_updater,
                            args=(self.net, heuristic_dict, domain_update_queue))
-        dq_thread.start()
+        #dq_thread.start()
 
         ######################################################################
         #   Step 2: handle the initial polytope                              #
@@ -437,39 +458,38 @@ class IncrementalGeoCertMultiProc(object):
         p_0 = Polytope.from_polytope_dict(p_0_dict, self.x_np,
                                          domain=self.domain,
                                          dead_constraints=self.dead_constraints,
-                                         gurobi=True)
+                                         gurobi=True,
+                                         lipschitz_ub=lip_value,
+                                         c_vector=c_vector)
         seen_polytopes[utils.flatten_config(p_0.config)] = True
 
         update_step_handle_polytope(self.net, self.x_np, self.true_label,
                                     sync_pq, seen_polytopes, self.domain,
                                     self.dead_constraints, p_0, self.lp_norm,
                                     domain_update_queue, pq_decision_bounds,
-                                    optimizer)
+                                    optimizer, potential)
 
 
         ######################################################################
         #   Step 3: Setup threads and start looping                          #
         ######################################################################
         # Do this on one processor if num_jobs is one
-        if num_proc == 1:
-            proc_args = (self.net, self.x_np, self.true_label, sync_pq,
-                         seen_polytopes, heuristic_dict, self.lp_norm,
-                         domain_update_queue, pq_decision_bounds, optimizer)
-            update_step_worker(*proc_args)
 
+        proc_args = (self.net, self.x_np, self.true_label, sync_pq,
+                     seen_polytopes, heuristic_dict, self.lp_norm,
+                     domain_update_queue, pq_decision_bounds, optimizer,
+                     potential)
+        if num_proc == 1:
+            update_step_worker(*proc_args)
         else:
             procs = [mp.Process(target=update_step_worker,
-                                args=(self.net, self.x_np, self.true_label,
-                                sync_pq, seen_polytopes, heuristic_dict,
-                                self.lp_norm, domain_update_queue,
-                                pq_decision_bounds, optimizer),
-                                kwargs={'proc_id': i})
+                                args=proc_args, kwargs={'proc_id': i})
                      for i in range(num_proc)]
             [_.start() for _ in procs]
             [_.join() for _ in procs]
 
         # Stop the domain update thread
-        dq_thread.join()
+        #dq_thread.join()
 
         ######################################################################
         #   Step 4: Collect the best thing in the decision queue and return  #
@@ -493,7 +513,7 @@ class IncrementalGeoCertMultiProc(object):
 
 def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                        heuristic_dict, lp_norm, domain_update_queue,
-                       pq_decision_bounds, optimizer, proc_id=None):
+                       pq_decision_bounds, optimizer, potential, proc_id=None):
     """ Setup for the worker objects
     ARGS:
         network - actual network object to be copied over into memory
@@ -506,7 +526,7 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                                   seen_polytopes, heuristic_dict,
                                   lp_norm, domain_update_queue,
                                   pq_decision_bounds, optimizer,
-                                  proc_id=proc_id)
+                                  potential, proc_id=proc_id)
         if output is not True: # Termination condition
             return output
 
@@ -516,7 +536,7 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
 
 def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
                      heuristic_dict, lp_norm, domain_update_queue,
-                     pq_decision_bounds, optimizer, proc_id=None):
+                     pq_decision_bounds, optimizer, potential, proc_id=None):
     """ Inner loop for how to update the priority queue. This handles one
         particular thing being popped off the PQ
     """
@@ -525,7 +545,8 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
 
     poly_out = update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
                                       heuristic_dict, domain_update_queue,
-                                      pq_decision_bounds, proc_id=proc_id)
+                                      pq_decision_bounds, potential,
+                                      proc_id=proc_id)
 
     if isinstance(poly_out, bool): # bubble up booleans
         return poly_out
@@ -536,13 +557,13 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
     return update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
                                        seen_polytopes, domain, dead_constraints,
                                        new_poly, lp_norm, domain_update_queue,
-                                       pq_decision_bounds, optimizer)
+                                       pq_decision_bounds, optimizer, potential)
 
 
 
 def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
                            heuristic_dict, domain_update_queue,
-                           pq_decision_bounds, proc_id=None):
+                           pq_decision_bounds, potential, proc_id=None):
     """ Component method of the loop.
         1) Pops the top PQ element off and rejects it as seen before if so
         2) Collect the domain/heuristics
@@ -564,7 +585,6 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
             pq_decision_bounds.put(item)
         return False
 
-
     config = item.config
     tight_constraint = item.tight_constraint
 
@@ -585,6 +605,8 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     domain = heuristic_dict['domain']
     assert isinstance(domain, Domain)
     dead_constraints = heuristic_dict['dead_constraints']
+    lipschitz_ub = heuristic_dict['fast_lip']
+    c_vector = heuristic_dict['c_vector']
 
     ##########################################################################
     #   Step 3: Build polytope and return                                    #
@@ -593,7 +615,9 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     new_poly_dict = piecewise_net.compute_polytope_config(new_configs, False)
     new_poly = Polytope.from_polytope_dict(new_poly_dict, x,
                                            domain=domain,
-                                           dead_constraints=dead_constraints)
+                                           dead_constraints=dead_constraints,
+                                           lipschitz_ub=lipschitz_ub,
+                                           c_vector=c_vector)
 
     return new_poly, domain, dead_constraints
 
@@ -603,7 +627,7 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
 def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
                                 seen_polytopes, domain, dead_constraints,
                                 new_poly, lp_norm, domain_update_queue,
-                                pq_decision_bounds, optimizer):
+                                pq_decision_bounds, optimizer, potential):
     """ Component method of the loop
         1) Makes facets, rejecting quickly where we can
         2) Run convex optimization on everything we can't reject

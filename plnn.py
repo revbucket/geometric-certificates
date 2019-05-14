@@ -8,7 +8,7 @@ import numpy as np
 
 import time
 import copy
-import convex_adversarial as ca
+import convex_adversarial.convex_adversarial as ca
 
 
 
