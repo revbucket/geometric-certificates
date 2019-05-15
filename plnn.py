@@ -428,3 +428,155 @@ class PLNN_seq(PLNN):
         self.fcs = [layer for layer in sequential if type(layer) == nn.Linear]
 
         self.net = sequential
+
+
+
+class FixedNonlinearity(nn.Module):
+
+    def __init__(self, tensor):
+        self.tensor 
+
+    def forward(self, x):
+        return x * self.tensor
+
+
+
+class GeneralPLNN(nn.Module):
+    """ General Piecewise linear neural net that can handle arbitrary layers 
+    """
+
+    cls.linear_layers = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d) 
+    cls.nonlinear_layers = (nn.ReLU,)
+    def __init__(self, sequential):
+        super(GeneralPLNN, self).__init__() 
+        valid_layers = self.linear_layers + self.nonlinear_layers
+        assert all(isinstance(layer, valid_layers) for layer in sequential)
+        self.sequential = sequential 
+        # make example input 
+        self.example = None
+        self.nonlinear_shapes = None 
+
+    def forward(self, x):
+        return self.sequential(x)
+
+
+    def to_config(self, x, as_str=False):
+        """ Takes a 1xCxNxN (or 1x?) input and outputs either a tensor or a 
+            binary vector representing the ReLU configuration at point x 
+        ARGS:
+            x: Tensor - input to the neural net 
+            as_str : boolean - if True, retuns a binary string config, 
+                     otherwise returns as a tensor 
+        RETURNS:
+            relu config, either as tensor or str 
+        """
+        relu_configs = []
+        for el in self.sequential:
+            if isinstance(el, nn.ReLU):
+                relu_configs.append(x) # <-- CHECK THAT THIS THE RIGHT THING
+            x = el(x)
+        
+        if not as_str:
+            return relu_configs
+        else:
+            return utils.flatten_config(_.view(-1) > 0 for _ in relu_configs)
+
+
+    def _config_to_fixed(self, config):
+        """ Takes in a config and makes fixed 'replacement' layers to be used 
+            in lieu of the nonlinearities 
+        ARGS:
+            config: either output of self.to_config 
+        RETURNS:
+            list of nn.FixedNonlinearity instances
+        """
+
+        if isinstance(config, str):
+            last_idx = 0
+            relu_configs = []
+            binstr_to_np = lambda b: np.array(int(_) for _ in b)
+            for shape in self.nonlinear_shapes():
+                numel = shape.numel() 
+                relu_configs.append(binstr_to_np(config[last_idx: 
+                                                        last_idx + numel]))
+                last_idx += numel
+
+            relu_configs = [Torch.FloatTensor(_) for _  relu_configs]
+        else:
+            relu_configs = config # maybe change type here             
+
+        return [FixedNonlinearity(_) for _ in relu_configs]
+
+
+    def compute_linear_map_config(self, config):
+        """ Given a list of configs, generates the linear map at this point """
+
+
+    def compute_polytope_config(self, config):
+        """ Given a list of configs, generates the polytope for the linear 
+            region
+        """
+        nonlins = self._config_to_fixed(config)
+
+        components = [] 
+        # Run through all components to get nonlinears + values
+        test_point = self.zeros_like(self.example, requires_grad=True) # or Variable(...)?
+        num_nonlinears = 0
+        for layer in self.sequential:
+            if isinstance(layer, self.nonlinear_layers):
+                # If at a nonlinear layer, take jacobian
+                # --- linear term is the jacobian 
+                # --- constant term is the value of test_point                
+                test_point.backward() 
+                components.append({'A': test_point.grad.data, 
+                                   'b': test_point.data})
+                test_point.grad.zero_()
+                test_point = nonlins[num_nonlinears](test_point)
+            else:
+                test_point = layer(test_point)
+
+        if not isinstance(self.sequential[-1], self.nonlinear_layers):
+            test_point.backward() # or autograd or whatever 
+            total_A = test_point.grad.data 
+            total_b = test_point 
+        else:
+            total_A = components[-1]['A']
+            total_b = components[-1]['b']
+
+        # Stack and return values 
+        return {'ub_A': torch.cat(_['A'] for _ in components), 
+                'ub_b': -torch.cat(_['b'] for _ in components),
+                'total_a': total_A, 
+                'total_b': total_b, 
+                'configs': config}
+
+
+    def compute_polytope(self, x):
+        """ Given an input point, computes the linear region containing this 
+            point 
+        """
+
+        config = self.to_config(x)
+        return self.compute_polytope_config(config)
+
+
+    def make_adversarial_constraints(self, polytope, true_label, domain):
+        total_a = polytope.linear_map['A']
+        total_b = polytope.linear_map['b'] 
+
+        num_logits = total_a.shape[0]
+        facets = [] 
+        true_a = total_a[true_label]
+        true_b = total_b[true_label]
+
+        for i in range(num_logits):
+            if i == true_label:
+                continue
+            dec_bound = {'A': true_a - total_a[i],
+                         'b': total_b[i] - true_b}
+            new_facet = polytope.facet_constructor(None, facet_type='decision',
+                                                   extra_tightness=dec_bound)
+            if new_facet.fast_domain_check():
+                facets.append(new_facet)
+        return facets
+    
