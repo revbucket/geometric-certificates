@@ -18,24 +18,40 @@ class PLNN(nn.Module):
     """ Simple piecewise neural net.
         Fully connected layers and ReLus only
     """
-    def __init__(self, layer_sizes=None, bias=True, dtype=torch.FloatTensor):
+    def __init__(self, layer_sizes=None, bias=True, dtype=torch.FloatTensor,
+                 sequential=None):
         super(PLNN, self).__init__()
+        assert (layer_sizes is None) ^ (sequential is None)
+        if layer_sizes is not None:
+            super(PLNN, self).__init__()
+            self.layer_sizes = layer_sizes
+            self.dtype = dtype
+            self.fcs = []
+            self.net = self.build_network(layer_sizes, bias)
+        else:
+            valid_seq_layers = (nn.Linear, nn.ReLU())
+            self.fcs = []
+            self.layer_sizes = []
+            for i, layer in enumerate(sequential):
+                if isinstance(layer, nn.Linear):
+                    self.fcs.append(layer)
+                    self.layer_sizes.append(layer.in_features)
+                    if (i +1 != len(sequential)):
+                        assert isinstance(sequential[i + 1], nn.ReLU)
+                    else:
+                        self.layer_sizes.append(layer.out_features)
+            self.net = sequential
 
-        if layer_sizes is None:
-            layer_sizes = [32, 64, 128, 64, 32, 10]
-        self.layer_sizes = layer_sizes
-        self.dtype = dtype
-        self.fcs = []
-        self.bias = bias
-        self.net = self.build_network(layer_sizes)
 
-    def build_network(self, layer_sizes):
+
+
+    def build_network(self, layer_sizes, bias):
         layers = OrderedDict()
 
         num = 1
         for size_pair in zip(layer_sizes, layer_sizes[1:]):
             size, next_size = size_pair
-            layer = nn.Linear(size, next_size, bias=self.bias).type(self.dtype)
+            layer = nn.Linear(size, next_size, bias=bias).type(self.dtype)
             layers[str(num)] = layer
             self.fcs.append(layer)
             num = num + 1
@@ -431,62 +447,89 @@ class PLNN_seq(PLNN):
 
 
 
-class FixedNonlinearity(nn.Module):
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
 
+
+class FixedNonlinearity(nn.Module):
     def __init__(self, tensor):
-        self.tensor 
+        super(FixedNonlinearity, self).__init__()
+        self.tensor = tensor
 
     def forward(self, x):
-        return x * self.tensor
+        if x.shape == self.tensor.shape:
+            return x * self.tensor
+        else:
+            return x * self.tensor.view(x.shape)
 
 
 
 class GeneralPLNN(nn.Module):
-    """ General Piecewise linear neural net that can handle arbitrary layers 
+    """ General Piecewise linear neural net that can handle arbitrary layers
     """
 
-    cls.linear_layers = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d) 
-    cls.nonlinear_layers = (nn.ReLU,)
-    def __init__(self, sequential):
-        super(GeneralPLNN, self).__init__() 
-        valid_layers = self.linear_layers + self.nonlinear_layers
-        assert all(isinstance(layer, valid_layers) for layer in sequential)
-        self.sequential = sequential 
-        # make example input 
-        self.example = None
-        self.nonlinear_shapes = None 
+    # Set class variables
+    linear_layer_types = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, Flatten)
+    nonlinear_layer_types = (nn.ReLU,)
+    valid_layer_types = linear_layer_types + nonlinear_layer_types
 
-    def forward(self, x):
-        return self.sequential(x)
+
+    def __init__(self, sequential, example_input):
+        super(GeneralPLNN, self).__init__()
+        assert all(isinstance(layer, GeneralPLNN.valid_layer_types)
+                   for layer in sequential)
+        self.sequential = sequential
+
+
+        # Be lazy and just let an example input define the shapes of layers
+        self.example = torch.zeros_like(example_input)
+        test_input = torch.zeros_like(self.example)
+
+        nonlinear_shapes = []
+        for layer in sequential:
+            test_input = layer(test_input)
+            if isinstance(layer, GeneralPLNN.nonlinear_layer_types):
+                nonlinear_shapes.append(test_input.shape)
+
+        self.nonlinear_shapes = nonlinear_shapes
+        self.output_shape = test_input.shape
+        self.layerwise_jacobians = None
+        self.layerwise_biases = None
+        # self.layerwise_jacobians = self._compute_layerwise_jacobians()
+
+    def forward(self, *args):
+        return self.sequential(*args)
 
 
     def to_config(self, x, as_str=False):
-        """ Takes a 1xCxNxN (or 1x?) input and outputs either a tensor or a 
-            binary vector representing the ReLU configuration at point x 
+        """ Takes a 1xCxNxN (or 1x?) input and outputs either a tensor or a
+            binary vector representing the ReLU configuration at point x
         ARGS:
-            x: Tensor - input to the neural net 
-            as_str : boolean - if True, retuns a binary string config, 
-                     otherwise returns as a tensor 
+            x: Tensor - input to the neural net
+            as_str : boolean - if True, retuns a binary string config,
+                     otherwise returns as a tensor
         RETURNS:
-            relu config, either as tensor or str 
+            relu config, either as tensor or str
         """
         relu_configs = []
         for el in self.sequential:
             if isinstance(el, nn.ReLU):
                 relu_configs.append(x) # <-- CHECK THAT THIS THE RIGHT THING
             x = el(x)
-        
+
+        relu_configs = [_ > 0 for _ in relu_configs]
         if not as_str:
             return relu_configs
         else:
-            return utils.flatten_config(_.view(-1) > 0 for _ in relu_configs)
+            return utils.flatten_config(_.view(-1) for _ in relu_configs)
 
 
     def _config_to_fixed(self, config):
-        """ Takes in a config and makes fixed 'replacement' layers to be used 
-            in lieu of the nonlinearities 
+        """ Takes in a config and makes fixed 'replacement' layers to be used
+            in lieu of the nonlinearities
         ARGS:
-            config: either output of self.to_config 
+            config: either output of self.to_config
         RETURNS:
             list of nn.FixedNonlinearity instances
         """
@@ -495,65 +538,147 @@ class GeneralPLNN(nn.Module):
             last_idx = 0
             relu_configs = []
             binstr_to_np = lambda b: np.array(int(_) for _ in b)
-            for shape in self.nonlinear_shapes():
-                numel = shape.numel() 
-                relu_configs.append(binstr_to_np(config[last_idx: 
+            for shape in self.nonlinear_shapes:
+                numel = shape.numel()
+                relu_configs.append(binstr_to_np(config[last_idx:
                                                         last_idx + numel]))
                 last_idx += numel
-
-            relu_configs = [Torch.FloatTensor(_) for _  relu_configs]
         else:
-            relu_configs = config # maybe change type here             
+            relu_configs = config
+
+        relu_configs = [_.float() for _ in relu_configs]
 
         return [FixedNonlinearity(_) for _ in relu_configs]
 
 
-    def compute_linear_map_config(self, config):
-        """ Given a list of configs, generates the linear map at this point """
+    def _compute_layerwise_jacobians(self):
+        """ For each contiguous group of linear operators,
+            compute the layerwise jacobians. These can be precached and used
+            later
+        """
+        if self.layerwise_jacobians is not None:
+            return self.layerwise_jacobians, self.layerwise_biases
+
+        layerwise_jacobians = []
+        layerwise_biases = []
+        linear_stack = []
+        example = torch.zeros_like(self.example, requires_grad=True)
+        num_nonlinears = 0
+        input_shape = self.example.shape
+        shape_list = self.nonlinear_shapes + [self.output_shape]
+
+        for layer_no, layer in enumerate(self.sequential):
+            if (isinstance(layer, GeneralPLNN.nonlinear_layer_types) or
+                (layer_no + 1 == len(self.sequential))):
+
+                output_shape = shape_list[num_nonlinears]
+                jacobian_els = torch.Tensor(output_shape.numel(),
+                                            input_shape.numel())
+
+                if layer_no + 1 == len(self.sequential):
+                    linear_stack.append(layer)
+                output = example
+                for el in linear_stack:
+                    output = el(output)
+
+                layerwise_biases.append(output.view(-1))
+
+                for i, el in enumerate(output.view(-1)):
+                    el.backward(retain_graph=True)
+                    jacobian_els[i, :] = example.grad.data.view(-1)
+                    example.grad.zero_()
+                layerwise_jacobians.append(jacobian_els)
+                input_shape = output_shape
+                num_nonlinears += 1
+                linear_stack = []
+                example = torch.zeros_like(output, requires_grad=True)
+            else:
+                linear_stack.append(layer)
+
+        self.layerwise_jacobians = layerwise_jacobians
+        self.layerwise_biases = layerwise_biases
+        return self.layerwise_jacobians, self.layerwise_biases
+
+
+    def to_linear_sequential(self):
+        """ Returns a nn.sequential that's
+        """
+
+        jacobians, biases = self._compute_layerwise_jacobians()
+        # nonlinear indices
+        relus = [el for i, el in enumerate(self.sequential)
+                 if isinstance(el, GeneralPLNN.nonlinear_layer_types)]
+
+        new_sequential = []
+        for jac, bias, nonlin in zip(jacobians, biases, relus):
+
+            lin = nn.Linear(*jac.shape[::-1])
+            lin.weight.data = jac
+            lin.bias.data = bias
+            new_sequential.append(lin)
+            new_sequential.append(nonlin)
+
+        final_nonlin = nn.Linear(*jacobians[-1].shape[::-1])
+        final_nonlin.weight.data = jacobians[-1]
+        final_nonlin.bias.data = biases[-1]
+
+        new_sequential.append(final_nonlin)
+
+        new_sequential = nn.Sequential(*new_sequential)
+
+        return new_sequential
+
+    def to_plnn(self):
+        """ Returns a PLNN instance replacing this one """
+        return PLNN(sequential=self.to_linear_sequential())
 
 
     def compute_polytope_config(self, config):
-        """ Given a list of configs, generates the polytope for the linear 
+        """ Given a list of configs, generates the polytope for the linear
             region
         """
-        nonlins = self._config_to_fixed(config)
 
-        components = [] 
+        # Collect the linear maps and nonlinearity elements
+        nonlins = self._config_to_fixed(config)
+        jacobians, biases = self._compute_layerwise_jacobians()
+
+        components = []
         # Run through all components to get nonlinears + values
-        test_point = self.zeros_like(self.example, requires_grad=True) # or Variable(...)?
+        test_point = torch.zeros_like(self.example, requires_grad=True) # or Variable(...)?
         num_nonlinears = 0
         for layer in self.sequential:
-            if isinstance(layer, self.nonlinear_layers):
+            if isinstance(layer, GeneralPLNN.nonlinear_layer_types):
                 # If at a nonlinear layer, take jacobian
-                # --- linear term is the jacobian 
-                # --- constant term is the value of test_point                
-                test_point.backward() 
-                components.append({'A': test_point.grad.data, 
+                # --- linear term is the jacobian
+                # --- constant term is the value of test_point
+                test_point.backward()
+                components.append({'A': test_point.grad.data,
                                    'b': test_point.data})
                 test_point.grad.zero_()
                 test_point = nonlins[num_nonlinears](test_point)
             else:
                 test_point = layer(test_point)
 
-        if not isinstance(self.sequential[-1], self.nonlinear_layers):
-            test_point.backward() # or autograd or whatever 
-            total_A = test_point.grad.data 
-            total_b = test_point 
+        if not isinstance(self.sequential[-1],
+                          GeneralPLNN.nonlinear_layer_types):
+            test_point.backward() # or autograd or whatever
+            total_A = test_point.grad.data
+            total_b = test_point
         else:
             total_A = components[-1]['A']
             total_b = components[-1]['b']
 
-        # Stack and return values 
-        return {'ub_A': torch.cat(_['A'] for _ in components), 
+        # Stack and return values
+        return {'ub_A': torch.cat(_['A'] for _ in components),
                 'ub_b': -torch.cat(_['b'] for _ in components),
-                'total_a': total_A, 
-                'total_b': total_b, 
+                'total_a': total_A,
+                'total_b': total_b,
                 'configs': config}
 
 
     def compute_polytope(self, x):
-        """ Given an input point, computes the linear region containing this 
-            point 
+        """ Given an input point, computes the linear region containing this
+            point
         """
 
         config = self.to_config(x)
@@ -562,10 +687,10 @@ class GeneralPLNN(nn.Module):
 
     def make_adversarial_constraints(self, polytope, true_label, domain):
         total_a = polytope.linear_map['A']
-        total_b = polytope.linear_map['b'] 
+        total_b = polytope.linear_map['b']
 
         num_logits = total_a.shape[0]
-        facets = [] 
+        facets = []
         true_a = total_a[true_label]
         true_b = total_b[true_label]
 
@@ -579,4 +704,4 @@ class GeneralPLNN(nn.Module):
             if new_facet.fast_domain_check():
                 facets.append(new_facet)
         return facets
-    
+
