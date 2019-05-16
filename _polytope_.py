@@ -100,7 +100,7 @@ class Polytope(object):
 
 
 
-    def generate_facets_configs_parallel(self, seen_dict):
+    def generate_facets_configs_parallel(self, seen_dict, missed_dict=None):
         """ Does Facet checking in parallel using joblib to farm out multiple
             jobs to various processes (possibly on differing processors)
         NOTES:
@@ -161,10 +161,18 @@ class Polytope(object):
         #####################################################################
         #   Step 4: Remove all facets that have been seen before            #
         #####################################################################
-        potential_facets, num_seen = self.scrub_seen_idxs(potential_facets,
-                                                          seen_dict)
+
+        # Also remove the infeasible facets
+        potential_facets, num_seen, num_missed = \
+                            self.scrub_seen_idxs(potential_facets, seen_dict,
+                                                 missed_dict)
+
         if num_seen > 0:
             reject_dict['seen before'] += num_seen
+
+        if num_missed > 0:
+            reject_dict['missed before'] += num_missed
+
 
         ####################################################################
         #   Step 5: Set up the Gurobi model for reusable optimization      #
@@ -176,7 +184,7 @@ class Polytope(object):
         ######################################################################
 
         facets = [self.facet_constructor(idx) for idx in potential_facets]
-        return facets, dict(reject_dict)
+        return facets, reject_dict
 
 
 
@@ -256,6 +264,18 @@ class Polytope(object):
         self.gurobi_model = model
 
 
+    def _is_feasible(self):
+        """ Runs a gurobi check to see if this is a feasible model"""
+        if self.gurobi_model is None:
+            self._build_gurobi_model()
+
+        self.gurobi_model.setObjective(0)
+        self.gurobi_model.update()
+        self.gurobi_model.optimize()
+
+        return self.gurobi_model.Status
+
+
 
     def _is_dead(self, i):
         """ Just a quick check for deadness of a constraint. We don't need
@@ -283,11 +303,13 @@ class Polytope(object):
 
 
 
-    def scrub_seen_idxs(self, idx_list, seen_dict):
+    def scrub_seen_idxs(self, idx_list, seen_dict, missed_dict=None):
         """ Removes facets we've seen before, where idx_list is which idx is
-            tight
+            tight. Also removes the cache-miss polytopes
         """
-        output_idxs, num_seen_before = [], 0
+        if missed_dict is None:
+            missed_dict = {}
+        output_idxs, num_seen_before, num_missed_before = [], 0, 0
         for idx in idx_list:
             flip_i, flip_j = utils.index_to_config_coord(self.config, idx)
             new_configs = copy.deepcopy(self.config)
@@ -295,10 +317,13 @@ class Polytope(object):
             new_flat = utils.flatten_config(new_configs)
             if new_flat in seen_dict:
                 num_seen_before += 1
+            elif new_flat in missed_dict:
+                num_missed_before += 1
             else:
                 output_idxs.append(idx)
 
-        return output_idxs, num_seen_before
+        return output_idxs, num_seen_before, num_missed_before
+
 
 
 ##############################################################################
