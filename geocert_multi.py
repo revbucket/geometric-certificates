@@ -15,6 +15,7 @@ import utils.pytorch_utils as me_utils
 from _polytope_ import Polytope, Face
 import utilities as utils
 from domains import Domain
+from plnn import PLNN
 import torch
 import numpy as np
 import heapq
@@ -106,8 +107,13 @@ PQManager.register("PriorityQueue", PriorityQueue)
 
 
 class IncrementalGeoCertMultiProc(object):
+
+    bound_fxn_selector = {'ia': PLNN.compute_interval_bounds, 
+                          'dual_lp': PLNN.compute_dual_lp_bounds, 
+                          'full_lp': PLNN.compute_full_lp_bounds}
+
     def __init__(self, net, hyperbox_bounds=None,
-                 verbose=True,
+                 verbose=True, neuron_bounds='full_lp',
                  # And for 2d inputs, some kwargs for displaying things
                  display=False, save_dir=None, ax=None):
 
@@ -117,6 +123,8 @@ class IncrementalGeoCertMultiProc(object):
             config_fxn: how we're generating facets (parallel or serial)
             hyperbox_bounds: if not None, is a tuple of pair of numbers
                              (lo, hi) that define a valid hyperbox domain
+            neuron_bounds: string
+
             verbose: bool - if True, we print things
             THE REST ARE FOR DISPLAYING IN 2D CASES
         """
@@ -132,6 +140,9 @@ class IncrementalGeoCertMultiProc(object):
         self.save_dir = save_dir
         self.ax = ax
 
+        assert neuron_bounds in ['ia', 'dual_lp', 'full_lp']
+        self.neuron_bounds = neuron_bounds
+        self.bound_fxn = self.bound_fxn_selector[neuron_bounds]
         # And intialize the per-run state
         self._reset_state()
 
@@ -144,7 +155,8 @@ class IncrementalGeoCertMultiProc(object):
         self.lp_dist = None # filled in later
         self.seen_to_polytope_map = {} # binary config str -> Polytope object
         self.pq = [] # Priority queue that contains HeapElements
-        self.dead_constraints = [None] # wrapped in a dynamic object
+        self.dead_constraints = None
+        self.on_off_neurons = None
         self.domain = None # keeps track of domain and upper bounds
         self.config_history = None # keeps track of all seen polytope configs
 
@@ -296,11 +308,12 @@ class IncrementalGeoCertMultiProc(object):
 
 
     def _update_dead_constraints(self):
-        bounds = self.net.compute_dual_ia_bounds(self.domain)
-        tensor_dead_constraints = bounds[1]
-        self.dead_constraints = utils.cat_config(tensor_dead_constraints)
+        # Compute new bounds 
+        new_bounds = self.bound_fxn(self.net, self.domain)
 
-
+        # Change to dead constraint form 
+        self.dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
+        self.on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
 
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
                            num_proc=2, optimizer='gurobi', potential='lp',
@@ -348,22 +361,16 @@ class IncrementalGeoCertMultiProc(object):
 
         if potential == 'lipschitz':
             # Just assume binary classifiers for now
-            assert self.net(x).numel() == 2
-            c_vector = torch.Tensor([1.0, -1.0])
-            if self.true_label == 1:
-                c_vector = c_vector * -1
-            on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
-
+            # on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
             dual_lp = utils.dual_norm(lp_norm)
-            lip_value = self.net.fast_lip(c_vector, dual_lp, on_off_neurons)
+            c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp, 
+                                                             self.on_off_neurons)
         else:
             lip_value = None
             c_vector = None
 
         heuristic_dict['fast_lip'] = lip_value
         heuristic_dict['c_vector'] = c_vector
-
-        status_dict['terminated'] = False
         status_dict['num_proc'] = num_proc
         for i in range(num_proc):
             set_waiting_status(status_dict, i, False)
@@ -374,8 +381,9 @@ class IncrementalGeoCertMultiProc(object):
 
         # Start the domain update thread
         dq_thread = Thread(target=domain_queue_updater,
-                           args=(self.net, heuristic_dict, domain_update_queue,
-                                 potential, lp_norm))
+                           args=(self.net, self.x, heuristic_dict, 
+                                 domain_update_queue, potential, lp_norm,
+                                 self.bound_fxn))
         dq_thread.start()
 
         ######################################################################
@@ -387,6 +395,7 @@ class IncrementalGeoCertMultiProc(object):
         #       1) Build the original polytope
         #       2) Add polytope to seen polytopes
         #
+        print(len(self.dead_constraints), sum(self.dead_constraints))
         self._verbose_print('---Initial Polytope---')
         p_0_dict = self.net.compute_polytope(self.x, comparison_form_flag=False)
 
@@ -410,7 +419,7 @@ class IncrementalGeoCertMultiProc(object):
                 best_dist = best_decision_bound.priority
                 best_example = best_decision_bound.projection
                 return (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                        seen_polytopes)
+                        seen_polytopes, missed_polytopes)
             except Empty:
                 pass
 
@@ -446,12 +455,13 @@ class IncrementalGeoCertMultiProc(object):
                 best_decision_bound = pq_decision_bounds.get_nowait()
             except:
                 print("DECISION PROBLEM FAILED")
-                return None, adv_bound, adv_ex, None, ub_time, seen_polytopes
+                return (None, adv_bound, adv_ex, None, ub_time, seen_polytopes,
+                        missed_polytopes)
 
         best_dist = best_decision_bound.priority
         best_example = best_decision_bound.projection
         return  (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                 seen_polytopes)
+                 seen_polytopes, missed_polytopes)
 
 
 
@@ -498,7 +508,8 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
     # Build the polytope to pop from the queue
 
     poly_out = update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
-                                      heuristic_dict, domain_update_queue,
+                                      heuristic_dict, lp_norm, 
+                                      domain_update_queue,
                                       pq_decision_bounds, potential,
                                       status_dict, problem_type, proc_id)
 
@@ -518,7 +529,7 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
 
 
 def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
-                           heuristic_dict, domain_update_queue,
+                           heuristic_dict, lp_norm, domain_update_queue,
                            pq_decision_bounds, potential, status_dict,
                            problem_type, proc_id):
     """ Component method of the loop.
@@ -561,15 +572,15 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     else:
         seen_polytopes[utils.flatten_config(new_configs)] = True
 
-    if proc_id is None:
-        print("Popped:", item.priority)
-    else:
-        print("(p%s) Popped:" % proc_id, item.priority)
+
+
     ##########################################################################
     #   Step 2: Gather the domain and dead neurons                           #
     ##########################################################################
 
     domain = heuristic_dict['domain']
+    print("(p%s) Popped: %.06f  | %.06f" % 
+          (proc_id, item.priority, domain.current_upper_bound(lp_norm)))
     assert isinstance(domain, Domain)
     dead_constraints = heuristic_dict['dead_constraints']
     lipschitz_ub = heuristic_dict['fast_lip']
@@ -694,16 +705,18 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
 
 
 
-def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue,
-                         potential, lp_norm):
+def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
+                         potential, lp_norm, bound_fxn):
     """ Separate thread to handle updating the domain/dead constraints """
 
     domain = heuristic_dict['domain']
+
     while True:
         new_domain = domain_update_queue.get()
         if new_domain == None:
             break
-
+        print('-' * 20, "DOMAIN UPDATE | L_inf %.06f | L_2 %.06f" % 
+              (new_domain.linf_radius, new_domain.l2_radius))
         # Update the current domain and change the heuristic dict
 
         domain.set_hyperbox_bound(new_domain.box_low,
@@ -714,17 +727,18 @@ def domain_queue_updater(piecewise_net, heuristic_dict, domain_update_queue,
         heuristic_dict['domain'] = domain
 
         # And use the domain to compute the new dead constraints
-        dead_constraints = piecewise_net.compute_dual_ia_bounds(domain)[1]
-        heuristic_dict['dead_constraints'] = utils.cat_config(dead_constraints)
+        new_bounds = bound_fxn(piecewise_net, domain)
+        dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
+        on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
+        heuristic_dict['dead_constraints'] = dead_constraints
 
         # Use the domain to update the lipschitz bound on everything
         # (this can only shrink as we shrink the domain)
         if potential == 'lipschitz':
             # Just assume binary classifiers for now
-            c_vector = heuristic_dict['c_vector']
-            on_off_neurons = piecewise_net.compute_interval_bounds(domain, True)
             dual_lp = utils.dual_norm(lp_norm)
-            lip_value = piecewise_net.fast_lip(c_vector, dual_lp, on_off_neurons)
+            c_vector, lip_value = piecewise_net.fast_lip_all_vals(x, dual_lp, 
+                                                                  on_off_neurons)                        
             heuristic_dict['fast_lip'] = lip_value
 
 
@@ -741,7 +755,6 @@ def kill_processes(item, pqueue, domain_update_queue, pq_decision_bounds,
         kill_domain_update_queue(domain_update_queue)
         if item is not None:
             pq_decision_bounds.put(item)
-        status_dict['terminated'] = True
     return True
 
 def kill_domain_update_queue(domain_update_queue):

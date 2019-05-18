@@ -10,7 +10,7 @@ import time
 import copy
 import convex_adversarial.convex_adversarial as ca
 
-
+import full_lp as flp
 
 class PLNN(nn.Module):
     #TODO: determine if building net addition was necessary
@@ -64,7 +64,7 @@ class PLNN(nn.Module):
         """
 
         assert isinstance(config_str, str)
-        assert len(config_str, sum(self.layer_sizes[1:-1]))
+        assert len(config_str) ==  sum(self.layer_sizes[1:-1])
         splits = []
         running_idx = 0
         for el in self.layer_sizes[1:-1]:
@@ -203,7 +203,7 @@ class PLNN(nn.Module):
         return self.fcs[-1](x) # No ReLu on the last one
 
 
-    def compute_interval_bounds(self, domain_obj, on_off_format=False):
+    def compute_interval_bounds(self, domain_obj):
         """ For each neuron computes a bound for the range of values each
             pre-ReLU can take.
         ARGS:
@@ -223,6 +223,8 @@ class PLNN(nn.Module):
         # setup + asserts
         assert all(box[:, 0] <= box[:, 1])
 
+
+        # Redo this but doing it right :
         midpoint_matrix = torch.Tensor([[1.0], [1.0]]) / 2.0
         ranges_matrix = torch.Tensor([[-1.0], [1.0]]) / 2.0
         returned_bounds = []
@@ -231,30 +233,25 @@ class PLNN(nn.Module):
         for fc in self.fcs[:-1]:
             weight, bias = fc.weight, fc.bias
             midpoint = torch.matmul(working_bounds, midpoint_matrix)
-            ranges = torch.matmul(working_bounds, ranges_matrix)
-            new_midpoint = torch.matmul(weight, midpoint)
+            const_term = torch.matmul(fc.weight, midpoint)
             if bias is not None:
-                new_midpoint = bias.view(-1, 1)
-            new_ranges = torch.matmul(torch.abs(weight), ranges)
-
-            pre_relus = torch.cat([new_midpoint - new_ranges,
-                                   new_midpoint + new_ranges], 1)
-            dead_set.append((pre_relus[:,0] * pre_relus[:,1]) >= 0)
-            returned_bounds.append(pre_relus)
+                const_term += bias.view(-1, 1)
+            ranges = torch.matmul(working_bounds, ranges_matrix)
+            mapped_ranges = torch.matmul(abs(weight), ranges)
+            pre_relus = torch.cat((const_term - mapped_ranges,
+                                   const_term + mapped_ranges), dim=1)
+            returned_bounds.append(utils.as_numpy(pre_relus))
             working_bounds = F.relu(pre_relus)
 
-        if on_off_format is False:
-            return returned_bounds, dead_set
-        else:
-            on_off_list = []
-            for el in returned_bounds:
-                on_off_el = torch.LongTensor(el.shape[0])
-                on_off_el[:] = 0
-                on_off_el[el[:, 1] < 0] = -1
-                on_off_el[el[:, 0] >= 0] = 1
-                on_off_list.append(on_off_el)
-            return on_off_list
+        return returned_bounds
 
+
+
+    def compute_full_lp_bounds(self, domain_obj):
+        """ Compute the full linear program values.
+            Code here is in a different file
+        """
+        return flp.compute_full_lp_bounds(self, domain_obj)
 
 
 
@@ -274,25 +271,44 @@ class PLNN(nn.Module):
                 bounds.append(torch.cat((el.zl.view(-1, 1), el.zu.view(-1, 1)),
                                         dim=1))
                 dead_set.append(~el.I.squeeze())
+        return bounds
 
-        return bounds, dead_set
 
     def compute_dual_ia_bounds(self, domain_obj):
         """ Use both interval analysis and dual bounds to get best bounds """
 
-        ia = self.compute_interval_bounds(domain_obj)[0]
-        dd = self.compute_dual_lp_bounds(domain_obj)[0]
-
+        ia = self.compute_interval_bounds(domain_obj)
+        dd = self.compute_dual_lp_bounds(domain_obj)
         bounds = []
-        dead_set = []
         for i, d in zip(ia, dd):
             stacked = torch.stack((i, d))
             new_lows = torch.max(stacked[:, :, 0], dim=0)[0]
             new_highs = torch.min(stacked[:, :, 1], dim=0)[0]
             new_bounds = torch.stack((new_lows, new_highs), dim=1)
             bounds.append(new_bounds)
-            dead_set.append((new_bounds[:, 0] * new_bounds[:, 1]) >= 0)
-        return bounds, dead_set
+        return bounds
+
+
+    def fast_lip_all_vals(self, x, l_q, on_off_neurons):
+        """ Does the fast_value for all possible c's """
+        num_logits = self.fcs[-1].out_features
+
+        true_label = self(x).max(1)[1].item()
+
+        c_vecs, lip_values = [], []
+        for i in range(num_logits):
+            if true_label == i:
+                continue
+            c_vec = torch.zeros(num_logits)
+            c_vec[true_label] = 1.0
+            c_vec[i] = -1.0
+            lip_value = self.fast_lip(c_vec, l_q, on_off_neurons)
+            c_vecs.append(c_vec)
+            lip_values.append(lip_value)
+
+
+        return c_vecs, lip_values
+
 
     def fast_lip(self, c_vector, l_q, on_off_neurons):
         """
