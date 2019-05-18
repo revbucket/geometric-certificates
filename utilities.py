@@ -78,7 +78,6 @@ def index_to_config_coord(config, index):
 
 global_tolerance = 1e-6
 
-
 def split_tensor_pos(tensor):
     """ Splits tensor into positive and negative terms """
     pos_tensor = tensor.masked_fill(tensor < 0, 0.0)
@@ -834,6 +833,31 @@ def as_numpy(tensor_or_array):
 #                            Misc. Utilities                             #
 #                                                                        #
 ##########################################################################
+
+def ranges_to_dead_neurons(range_list):
+    """ Given a list of numpy (_x2) arrays, corresponding to ranges, converts
+        them all to uint8s with the values being 1 if both values lie on the
+        same side of zero, and 0 otherwise
+    """
+    return np.hstack([((el[:, 0] * el[:, 1]) >= 0).astype(np.uint8)
+                     for el in range_list])
+
+def ranges_to_on_off_neurons(range_list):
+    """ Given a list of numpy (_x2) arrays, corresponding to ranges, converts
+        them all to torch Longtensors with
+        -1: both values are <=0
+         0: left val is < 0, right val is > 0
+        +1: right val
+    """
+    outputs = []
+    for bound in range_list:
+        on_off_el = torch.LongTensor(bound.shape[0])
+        on_off_el[:] = 0
+        on_off_el[bound[:,1] < 0] = -1
+        on_off_el[bound[:,0] >= 0] = 1
+        outputs.append(on_off_el)
+    return outputs
+
 
 def dual_norm(lp):
     """ Returns the dual norm value (as a numeric!) from a (possibly numeric)

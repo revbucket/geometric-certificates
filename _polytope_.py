@@ -49,7 +49,12 @@ class Polytope(object):
         self.x_np = x_np
         self.linear_map = linear_map
         self.lipschitz_ub = lipschitz_ub
-        self.c_vector = utils.as_numpy(c_vector)
+
+        if c_vector is None:
+            self.c_vector = c_vector
+        else:
+            self.c_vector = [utils.as_numpy(_) for _ in c_vector]
+
 
     @classmethod
     def from_polytope_dict(cls, polytope_dict, x_np, domain=None,
@@ -448,16 +453,48 @@ class Face(Polytope):
             if self.lipschitz_ub is None:
                 self.gurobi_model.setObjective(t, gb.GRB.MINIMIZE)
             else:
-                # --- if self.lipschitz_ub is not None, we incorporate this
-                #     objective as follows
-                # goal is to min_{y in F} ||y - x||_inf + <c, f(y)>/L
-                # which is equivalent to  ||v||_inf + <c, f(v)>/L + <c, f(x)> /L
-                # and <c, f(v)> = <c, Av + b> for A,b in self.linear_map
-                ctA = self.c_vector.dot(self.linear_map['A'])
-                ctA = ctA / self.lipschitz_ub
-                lip_pot = gb.LinExpr(ctA, v_vars)
-                self.gurobi_model.setObjective(t + lip_pot, gb.GRB.MINIMIZE)
+                """
+                If self.lipschitz_ub is not None, then we incorporate this
+                objective as follows
 
+                Recall our setting is
+                min_{y in F} ||y -x|| + z
+                    s.t. z >= |c_j^T(f(y) - f(DB))|  / L_j
+                                                     for all j != true label
+                    (and f(DB)=0 and c_j^Tf(y) >= 0 and linear)
+
+                Then we need to compute g_j(y) := c_j^Tf(y) / L_j
+                for each j (as a linear functional)
+
+                But the minimization works like (letting y = x + v)
+                min_{x+v in F} ||v||_infty + z
+                s.t. z >= c_j^Tf(x+v) / L_j
+                and c_j^Tf(x+v) = a_j^T(x +v) + b_j = a_j^Tv + (b_j + a_j^Tx)
+
+                so  z >= a_j^Tv + (b_j + a_j^Tx)
+                and if f(y) = Ay + b
+                where a_j := c_j^TA/L_j and b_j = c_j^Tb/L_j
+                """
+
+
+                # First step is to compute the a_j/b_j for each c vector
+                lin_A = self.linear_map['A']
+                lin_b = self.linear_map['b']
+
+                a_js, b_js = [], []
+                for lip_val, c_vec in zip(self.lipschitz_ub, self.c_vector):
+                    a_js.append(c_vec.dot(lin_A) / lip_val)
+                    b_js.append(c_vec.dot(lin_b) / lip_val)
+
+                # Then we can add the constraint of z to everything
+                # (lip_var >= a_j^T v + (b_j + a_j^Tx))
+                lip_var = self.gurobi_model.addVar(lb=0, name='lip_var')
+                for j in range(len(a_js)):
+                    a_j, b_j = a_js[j], b_js[j]
+                    linexpr_j = gb.LinExpr(a_j, v_vars)
+                    const_j = b_j + a_j.dot(self.x_np)
+                    self.gurobi_model.addConstr(lip_var >= linexpr_j + const_j)
+                self.gurobi_model.setObjective(t + lip_var, gb.GRB.MINIMIZE)
 
             self.gurobi_model.update()
 
@@ -487,11 +524,6 @@ class Face(Polytope):
         if self.gurobi_model.Status == 2: # OPTIMAL STATUS
             # --- get objective
             obj_value = self.gurobi_model.getObjective().getValue()
-            if self.lipschitz_ub is not None:
-                cons_term = self.linear_map['A'].dot(self.x_np)
-                cons_term += self.linear_map['b']
-                cons_term = self.c_vector.dot(cons_term) / self.lipschitz_ub
-                obj_value += cons_term
             # print("OBJ", self.tight_list, obj_value)#, cons_term)
             # --- get variables and add to x
             opt_point =  self.x_np + np.array([v.X for v in v_vars])
