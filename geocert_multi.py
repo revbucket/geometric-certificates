@@ -317,7 +317,8 @@ class IncrementalGeoCertMultiProc(object):
 
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
                            num_proc=2, optimizer='gurobi', potential='lp',
-                           problem_type='min_dist', decision_radius=None):
+                           problem_type='min_dist', decision_radius=None, 
+                           collect_graph=False):
         ######################################################################
         #   Step 0: Clear and setup state                                    #
         ######################################################################
@@ -333,9 +334,10 @@ class IncrementalGeoCertMultiProc(object):
                                        extra_attack_kwargs=compute_upper_bound)
                 adv_bound, adv_ex, ub_time = ub_out
 
-        if problem_type == 'decision_problem':
+        if problem_type in ['decision_problem', 'count_regions']:
             assert decision_radius is not None
             self.domain.set_upper_bound(decision_radius, lp_norm)
+
 
         ######################################################################
         #   Step 1: Set up things needed for multiprocessing                 #
@@ -353,6 +355,10 @@ class IncrementalGeoCertMultiProc(object):
         status_dict = manager.dict()
         seen_polytopes = manager.dict()
         missed_polytopes = manager.dict()
+        if collect_graph:
+            polytope_graph = manager.dict()
+        else:
+            polytope_graph = None
 
         # Set up heuristic dicts
         heuristic_dict = manager.dict()
@@ -412,14 +418,14 @@ class IncrementalGeoCertMultiProc(object):
                                     self.dead_constraints, p_0, self.lp_norm,
                                     domain_update_queue, pq_decision_bounds,
                                     optimizer, potential, missed_polytopes,
-                                    status_dict, problem_type=problem_type)
+                                    status_dict, problem_type, polytope_graph)
         if problem_type == 'decision_problem':
             try:
                 best_decision_bound = pq_decision_bounds.get_nowait()
                 best_dist = best_decision_bound.priority
                 best_example = best_decision_bound.projection
                 return (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                        seen_polytopes, missed_polytopes)
+                        seen_polytopes, missed_polytopes, polytope_graph)
             except Empty:
                 pass
 
@@ -432,7 +438,8 @@ class IncrementalGeoCertMultiProc(object):
         proc_args = (self.net, self.x_np, self.true_label, sync_pq,
                      seen_polytopes, heuristic_dict, self.lp_norm,
                      domain_update_queue, pq_decision_bounds, optimizer,
-                     potential, missed_polytopes, problem_type, status_dict)
+                     potential, missed_polytopes, problem_type, status_dict,
+                     polytope_graph)
         if num_proc == 1:
             update_step_worker(*proc_args, **{'proc_id': 0})
         else:
@@ -454,14 +461,18 @@ class IncrementalGeoCertMultiProc(object):
             try:
                 best_decision_bound = pq_decision_bounds.get_nowait()
             except:
-                print("DECISION PROBLEM FAILED")
+                if problem_type == 'decision_problem':                    
+                    print("DECISION PROBLEM FAILED")
+                else:
+                    print("COUNTED %s LINEAR REGIONS" % len(seen_polytopes))
+
                 return (None, adv_bound, adv_ex, None, ub_time, seen_polytopes,
-                        missed_polytopes)
+                        missed_polytopes, polytope_graph)
 
         best_dist = best_decision_bound.priority
         best_example = best_decision_bound.projection
         return  (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                 seen_polytopes, missed_polytopes)
+                 seen_polytopes, missed_polytopes, polytope_graph)
 
 
 
@@ -478,13 +489,13 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                        heuristic_dict, lp_norm, domain_update_queue,
                        pq_decision_bounds, optimizer, potential,
                        missed_polytopes, problem_type, status_dict,
-                       proc_id=None):
+                       polytope_graph, proc_id=None):
     """ Setup for the worker objects
     ARGS:
         network - actual network object to be copied over into memory
         everything else is a manager
     """
-    assert problem_type in ['min_dist', 'decision_problem']
+    assert problem_type in ['min_dist', 'decision_problem', 'count_regions']
     # with everything set up, LFGD
     while True:
         output = update_step_loop(piecewise_net, x, true_label, pqueue,
@@ -492,7 +503,7 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                                   lp_norm, domain_update_queue,
                                   pq_decision_bounds, optimizer,
                                   potential, missed_polytopes, status_dict,
-                                  problem_type, proc_id=proc_id)
+                                  problem_type, polytope_graph, proc_id)
         if output is not True: # Termination condition
             return output
 
@@ -501,7 +512,7 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
 def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
                      heuristic_dict, lp_norm, domain_update_queue,
                      pq_decision_bounds, optimizer, potential, missed_polytopes,
-                     status_dict, problem_type, proc_id):
+                     status_dict, problem_type, polytope_graph, proc_id):
     """ Inner loop for how to update the priority queue. This handles one
         particular thing being popped off the PQ
     """
@@ -524,7 +535,7 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
                                        new_poly, lp_norm, domain_update_queue,
                                        pq_decision_bounds, optimizer, potential,
                                        missed_polytopes, status_dict,
-                                       problem_type=problem_type)
+                                       problem_type, polytope_graph)
 
 
 
@@ -541,7 +552,7 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     #   Step 1: pop something off the queue                                  #
     ##########################################################################
     try:
-        if problem_type == 'decision_problem':
+        if problem_type in ['decision_problem', 'count_regions']:
             item = pqueue.get_nowait()
         else:
             item = pqueue.get()
@@ -579,8 +590,10 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     ##########################################################################
 
     domain = heuristic_dict['domain']
+    current_upper_bound = domain.current_upper_bound(lp_norm) or 1e10
+
     print("(p%s) Popped: %.06f  | %.06f" % 
-          (proc_id, item.priority, domain.current_upper_bound(lp_norm)))
+          (proc_id, item.priority, current_upper_bound))
     assert isinstance(domain, Domain)
     dead_constraints = heuristic_dict['dead_constraints']
     lipschitz_ub = heuristic_dict['fast_lip']
@@ -607,7 +620,7 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
                                 new_poly, lp_norm, domain_update_queue,
                                 pq_decision_bounds, optimizer, potential,
                                 missed_polytopes, status_dict,
-                                problem_type='min_dist'):
+                                problem_type, polytope_graph):
     """ Component method of the loop
         1) Makes facets, rejecting quickly where we can
         2) Run convex optimization on everything we can't reject
@@ -620,8 +633,12 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
 
     new_facets, rejects = new_poly.generate_facets_configs_parallel(seen_polytopes,
                                                                 missed_polytopes)
-    adv_constraints = piecewise_net.make_adversarial_constraints(new_poly,
+
+    if problem_type != 'count_regions':
+        adv_constraints = piecewise_net.make_adversarial_constraints(new_poly,
                                                             true_label, domain)
+    else:
+        adv_constraints = []
 
 
     ##########################################################################
@@ -647,15 +664,24 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
     fail_count = 0
     try_count = len(outputs)
     for facet, (dist, proj) in outputs:
+        try:
+            new_facet_conf = utils.flatten_config(facet.get_new_configs())
+        except:
+            new_facet_conf = None
         if dist is None:
             rejects['optimization infeasible'] += 1
             if facet.facet_type == 'decision':
                 continue
             # Handle infeasible case
-            new_facet_conf = utils.flatten_config(facet.get_new_configs())
+
             missed_polytopes[new_facet_conf] = True
             fail_count += 1
             continue
+        if polytope_graph is not None:
+            edge = (utils.flatten_config(new_poly.config), 
+                    new_facet_conf)
+            polytope_graph[edge] = dist
+
         if current_upper_bound is not None and dist > current_upper_bound:
             #Handle the too-far-away facets
             rejects['above upper bound']
@@ -715,8 +741,11 @@ def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
         new_domain = domain_update_queue.get()
         if new_domain == None:
             break
+
+        linf_radius = new_domain.linf_radius or 1e10
+        l2_radius = new_domain.l2_radius or 1e10
         print('-' * 20, "DOMAIN UPDATE | L_inf %.06f | L_2 %.06f" % 
-              (new_domain.linf_radius, new_domain.l2_radius))
+              (linf_radius, l2_radius))
         # Update the current domain and change the heuristic dict
 
         domain.set_hyperbox_bound(new_domain.box_low,
