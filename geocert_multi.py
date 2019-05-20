@@ -108,8 +108,8 @@ PQManager.register("PriorityQueue", PriorityQueue)
 
 class IncrementalGeoCertMultiProc(object):
 
-    bound_fxn_selector = {'ia': PLNN.compute_interval_bounds, 
-                          'dual_lp': PLNN.compute_dual_lp_bounds, 
+    bound_fxn_selector = {'ia': PLNN.compute_interval_bounds,
+                          'dual_lp': PLNN.compute_dual_lp_bounds,
                           'full_lp': PLNN.compute_full_lp_bounds}
 
     def __init__(self, net, hyperbox_bounds=None,
@@ -308,22 +308,29 @@ class IncrementalGeoCertMultiProc(object):
 
 
     def _update_dead_constraints(self):
-        # Compute new bounds 
+        # Compute new bounds
         new_bounds = self.bound_fxn(self.net, self.domain)
 
-        # Change to dead constraint form 
+        # Change to dead constraint form
         self.dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
         self.on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
 
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
                            num_proc=2, optimizer='gurobi', potential='lp',
-                           problem_type='min_dist', decision_radius=None, 
-                           collect_graph=False):
+                           problem_type='min_dist', decision_radius=None,
+                           collect_graph=False, max_runtime=None):
         ######################################################################
         #   Step 0: Clear and setup state                                    #
         ######################################################################
         self._reset_state() # clear out the state first
         self._setup_state(x, lp_norm, num_proc, optimizer, potential)
+
+        start_time = time.time()
+        # Upper bound times that the domain queue updater knows about
+        upper_bound_times = mp.Queue() # (time, bound)
+
+        # Lower bound times that the workers know about
+        lower_bound_times = mp.Queue() # (time, bound)
 
 
         # Compute upper bound
@@ -333,7 +340,8 @@ class IncrementalGeoCertMultiProc(object):
                 ub_out = self._compute_upper_bounds(x, self.true_label, lp_norm,
                                        extra_attack_kwargs=compute_upper_bound)
                 adv_bound, adv_ex, ub_time = ub_out
-
+                if adv_bound is not None:
+                    upper_bound_times.put((time.time() - start_time, adv_bound))
         if problem_type in ['decision_problem', 'count_regions']:
             assert decision_radius is not None
             self.domain.set_upper_bound(decision_radius, lp_norm)
@@ -353,6 +361,7 @@ class IncrementalGeoCertMultiProc(object):
         # Set up the seen_polytopes
         manager = mp.Manager()
         status_dict = manager.dict()
+        status_dict['kill_max_runtime_thread'] = False
         seen_polytopes = manager.dict()
         missed_polytopes = manager.dict()
         if collect_graph:
@@ -369,7 +378,7 @@ class IncrementalGeoCertMultiProc(object):
             # Just assume binary classifiers for now
             # on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
             dual_lp = utils.dual_norm(lp_norm)
-            c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp, 
+            c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp,
                                                              self.on_off_neurons)
         else:
             lip_value = None
@@ -385,13 +394,26 @@ class IncrementalGeoCertMultiProc(object):
         # Set up domain updater queue
         domain_update_queue = mp.Queue()
 
+
+
         # Start the domain update thread
         dq_thread = Thread(target=domain_queue_updater,
-                           args=(self.net, self.x, heuristic_dict, 
+                           args=(self.net, self.x, heuristic_dict,
                                  domain_update_queue, potential, lp_norm,
-                                 self.bound_fxn))
+                                 self.bound_fxn, upper_bound_times, start_time,
+                                 max_runtime))
         dq_thread.start()
 
+        # Start max runtime thread
+        if max_runtime is not None:
+            runtime_thread = Thread(target=max_runtime_thread,
+                                    args=(start_time, max_runtime, sync_pq,
+                                          domain_update_queue,
+                                          pq_decision_bounds, status_dict))
+        else:
+            dummy_thread = lambda: None
+            runtime_thread = Thread(target=dummy_thread)
+        runtime_thread.start()
         ######################################################################
         #   Step 2: handle the initial polytope                              #
         ######################################################################
@@ -419,13 +441,19 @@ class IncrementalGeoCertMultiProc(object):
                                     domain_update_queue, pq_decision_bounds,
                                     optimizer, potential, missed_polytopes,
                                     status_dict, problem_type, polytope_graph)
+
         if problem_type == 'decision_problem':
             try:
                 best_decision_bound = pq_decision_bounds.get_nowait()
                 best_dist = best_decision_bound.priority
                 best_example = best_decision_bound.projection
+
+                dq_thread.join()
+                status_dict['kill_max_runtime_thread'] = True
+                runtime_thread.join()
                 return (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                        seen_polytopes, missed_polytopes, polytope_graph)
+                        seen_polytopes, missed_polytopes, polytope_graph,
+                        lower_bound_times, upper_bound_times)
             except Empty:
                 pass
 
@@ -439,7 +467,7 @@ class IncrementalGeoCertMultiProc(object):
                      seen_polytopes, heuristic_dict, self.lp_norm,
                      domain_update_queue, pq_decision_bounds, optimizer,
                      potential, missed_polytopes, problem_type, status_dict,
-                     polytope_graph)
+                     polytope_graph, lower_bound_times, start_time)
         if num_proc == 1:
             update_step_worker(*proc_args, **{'proc_id': 0})
         else:
@@ -451,28 +479,37 @@ class IncrementalGeoCertMultiProc(object):
 
         # Stop the domain update thread
         dq_thread.join()
+        status_dict['kill_max_runtime_thread'] = True
+        runtime_thread.join()
 
         ######################################################################
         #   Step 4: Collect the best thing in the decision queue and return  #
         ######################################################################
-        if problem_type == 'min_dist':
+
+        overran_time = ((max_runtime is not None) and\
+                        (time.time() - start_time > max_runtime))
+        if problem_type == 'min_dist' and not overran_time:
             best_decision_bound = pq_decision_bounds.get()
         else:
             try:
                 best_decision_bound = pq_decision_bounds.get_nowait()
             except:
-                if problem_type == 'decision_problem':                    
+                if overran_time:
+                    print("TIMEOUT")
+                elif problem_type == 'decision_problem':
                     print("DECISION PROBLEM FAILED")
                 else:
                     print("COUNTED %s LINEAR REGIONS" % len(seen_polytopes))
 
                 return (None, adv_bound, adv_ex, None, ub_time, seen_polytopes,
-                        missed_polytopes, polytope_graph)
+                        missed_polytopes, polytope_graph,
+                        lower_bound_times, upper_bound_times)
 
         best_dist = best_decision_bound.priority
         best_example = best_decision_bound.projection
         return  (best_dist, adv_bound, adv_ex, best_example, ub_time,
-                 seen_polytopes, missed_polytopes, polytope_graph)
+                 seen_polytopes, missed_polytopes, polytope_graph,
+                 lower_bound_times, upper_bound_times)
 
 
 
@@ -489,7 +526,8 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                        heuristic_dict, lp_norm, domain_update_queue,
                        pq_decision_bounds, optimizer, potential,
                        missed_polytopes, problem_type, status_dict,
-                       polytope_graph, proc_id=None):
+                       polytope_graph, lower_bound_times, start_time,
+                       proc_id=None):
     """ Setup for the worker objects
     ARGS:
         network - actual network object to be copied over into memory
@@ -503,7 +541,8 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
                                   lp_norm, domain_update_queue,
                                   pq_decision_bounds, optimizer,
                                   potential, missed_polytopes, status_dict,
-                                  problem_type, polytope_graph, proc_id)
+                                  problem_type, polytope_graph,
+                                  lower_bound_times, start_time, proc_id)
         if output is not True: # Termination condition
             return output
 
@@ -512,17 +551,19 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
 def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
                      heuristic_dict, lp_norm, domain_update_queue,
                      pq_decision_bounds, optimizer, potential, missed_polytopes,
-                     status_dict, problem_type, polytope_graph, proc_id):
+                     status_dict, problem_type, polytope_graph,
+                     lower_bound_times, start_time, proc_id):
     """ Inner loop for how to update the priority queue. This handles one
         particular thing being popped off the PQ
     """
     # Build the polytope to pop from the queue
 
     poly_out = update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
-                                      heuristic_dict, lp_norm, 
+                                      heuristic_dict, lp_norm,
                                       domain_update_queue,
                                       pq_decision_bounds, potential,
-                                      status_dict, problem_type, proc_id)
+                                      status_dict, problem_type,
+                                      lower_bound_times, start_time, proc_id)
 
     if isinstance(poly_out, bool): # bubble up booleans
         return poly_out
@@ -542,7 +583,8 @@ def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
 def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
                            heuristic_dict, lp_norm, domain_update_queue,
                            pq_decision_bounds, potential, status_dict,
-                           problem_type, proc_id):
+                           problem_type, lower_bound_times, start_time,
+                           proc_id):
     """ Component method of the loop.
         1) Pops the top PQ element off and rejects it as seen before if so
         2) Collect the domain/heuristics
@@ -574,6 +616,9 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
                        status_dict)
         return False
 
+    # Update the lower bound queue
+    lower_bound_times.put(((time.time() - start_time), item.priority))
+
     config = item.config
     tight_constraint = item.tight_constraint
 
@@ -592,7 +637,7 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     domain = heuristic_dict['domain']
     current_upper_bound = domain.current_upper_bound(lp_norm) or 1e10
 
-    print("(p%s) Popped: %.06f  | %.06f" % 
+    print("(p%s) Popped: %.06f  | %.06f" %
           (proc_id, item.priority, current_upper_bound))
     assert isinstance(domain, Domain)
     dead_constraints = heuristic_dict['dead_constraints']
@@ -678,7 +723,7 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
             fail_count += 1
             continue
         if polytope_graph is not None:
-            edge = (utils.flatten_config(new_poly.config), 
+            edge = (utils.flatten_config(new_poly.config),
                     new_facet_conf)
             polytope_graph[edge] = dist
 
@@ -732,10 +777,14 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
 
 
 def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
-                         potential, lp_norm, bound_fxn):
+                         potential, lp_norm, bound_fxn, upper_bound_times,
+                         start_time, max_runtime):
     """ Separate thread to handle updating the domain/dead constraints """
 
     domain = heuristic_dict['domain']
+    attr = {'l_inf': 'linf_radius',
+            'l_2':   'l2_radius'}[lp_norm]
+
 
     while True:
         new_domain = domain_update_queue.get()
@@ -744,8 +793,15 @@ def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
 
         linf_radius = new_domain.linf_radius or 1e10
         l2_radius = new_domain.l2_radius or 1e10
-        print('-' * 20, "DOMAIN UPDATE | L_inf %.06f | L_2 %.06f" % 
+        print('-' * 20, "DOMAIN UPDATE | L_inf %.06f | L_2 %.06f" %
               (linf_radius, l2_radius))
+
+        # Record the update in the upper_bound_times log
+        if getattr(new_domain, attr) < getattr(domain, attr):
+            upper_bound_times.put((time.time() - start_time,
+                                   getattr(new_domain, attr)))
+
+
         # Update the current domain and change the heuristic dict
 
         domain.set_hyperbox_bound(new_domain.box_low,
@@ -754,6 +810,9 @@ def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
         domain.set_l_inf_upper_bound(new_domain.linf_radius)
         domain.set_l_2_upper_bound(new_domain.l2_radius)
         heuristic_dict['domain'] = domain
+
+
+
 
         # And use the domain to compute the new dead constraints
         new_bounds = bound_fxn(piecewise_net, domain)
@@ -766,8 +825,8 @@ def domain_queue_updater(piecewise_net, x, heuristic_dict, domain_update_queue,
         if potential == 'lipschitz':
             # Just assume binary classifiers for now
             dual_lp = utils.dual_norm(lp_norm)
-            c_vector, lip_value = piecewise_net.fast_lip_all_vals(x, dual_lp, 
-                                                                  on_off_neurons)                        
+            c_vector, lip_value = piecewise_net.fast_lip_all_vals(x, dual_lp,
+                                                                  on_off_neurons)
             heuristic_dict['fast_lip'] = lip_value
 
 
@@ -785,6 +844,20 @@ def kill_processes(item, pqueue, domain_update_queue, pq_decision_bounds,
         if item is not None:
             pq_decision_bounds.put(item)
     return True
+
+
+def max_runtime_thread(start_time, max_runtime, pqueue, domain_update_queue,
+                       pq_decision_bounds, status_dict):
+    """ Thread to kill all processes if we run over the max allotted time """
+    ready_to_kill = lambda : time.time() - start_time > max_runtime
+    while True:
+        if ready_to_kill() or status_dict['kill_max_runtime_thread']:
+            kill_processes(None, pqueue, domain_update_queue,
+                           pq_decision_bounds, status_dict)
+            return
+        else:
+            time.sleep(0.5)
+
 
 def kill_domain_update_queue(domain_update_queue):
     """ puts a poison pill onto the domain_update_queue"""
