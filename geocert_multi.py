@@ -283,7 +283,6 @@ class IncrementalGeoCertMultiProc(object):
                                           success_def='alter_top_logit')
         success_idxs = success_out['success_idxs']
         if USE_GPU:
-            best_adv = best_adv.cpu()
             labels = labels.cpu()
             self.net.cpu()
 
@@ -293,6 +292,9 @@ class IncrementalGeoCertMultiProc(object):
         diffs = pert_out.delta.data.index_select(0, success_idxs)
         max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
         best_adv = success_out['adversarials'][max_idx].squeeze()
+
+        if USE_GPU:
+            best_adv = best_adv.cpu()
 
         # Set both l_inf and l_2 upper bounds
         l_inf_upper_bound = (best_adv - x.view(-1)).abs().max().item()
@@ -307,16 +309,31 @@ class IncrementalGeoCertMultiProc(object):
 
 
 
-    def _update_dead_constraints(self):
+    # def _update_dead_constraints(self):
+    #     # Compute new bounds
+    #     new_bounds = self.bound_fxn(self.net, self.domain)
+    #
+    #     # Change to dead constraint form
+    #     self.dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
+    #     self.on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
+
+    def _update_dead_constraints(self, bound_fxn=None):
         # Compute new bounds
-        new_bounds = self.bound_fxn(self.net, self.domain)
+        if bound_fxn is None:
+            bound_fxn = self.bound_fxn
+
+        else:
+            bound_fxn = self.bound_fxn_selector[bound_fxn]
+
+        new_bounds = bound_fxn(self.net, self.domain)
 
         # Change to dead constraint form
         self.dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
         self.on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
 
+
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
-                           num_proc=2, optimizer='gurobi', potential='lp',
+                           num_proc=1, optimizer='gurobi', potential='lp',
                            problem_type='min_dist', decision_radius=None,
                            collect_graph=False, max_runtime=None):
         ######################################################################
@@ -347,30 +364,100 @@ class IncrementalGeoCertMultiProc(object):
             self.domain.set_upper_bound(decision_radius, lp_norm)
 
 
+        # ######################################################################
+        # #   Step 1: Set up things needed for multiprocessing                 #
+        # ######################################################################
+        #
+        # # Set up the priorityqueue
+        # pq_manager = PQManager()
+        # pq_manager.start()
+        # sync_pq = pq_manager.PriorityQueue()
+        #
+        # pq_decision_bounds = pq_manager.PriorityQueue()
+        #
+        # # Set up the seen_polytopes
+        # manager = mp.Manager()
+        # status_dict = manager.dict()
+        # status_dict['kill_max_runtime_thread'] = False
+        # seen_polytopes = manager.dict()
+        # missed_polytopes = manager.dict()
+        # if collect_graph:
+        #     polytope_graph = manager.dict()
+        # else:
+        #     polytope_graph = None
+        #
+        # # Set up heuristic dicts
+        # heuristic_dict = manager.dict()
+        # heuristic_dict['domain'] = self.domain
+        # heuristic_dict['dead_constraints'] = self.dead_constraints
+        #
+        # if potential == 'lipschitz':
+        #     # Just assume binary classifiers for now
+        #     # on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
+        #     dual_lp = utils.dual_norm(lp_norm)
+        #     c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp,
+        #                                                      self.on_off_neurons)
+        # else:
+        #     lip_value = None
+        #     c_vector = None
+        #
+        # heuristic_dict['fast_lip'] = lip_value
+        # heuristic_dict['c_vector'] = c_vector
+        # status_dict['num_proc'] = num_proc
+        # for i in range(num_proc):
+        #     set_waiting_status(status_dict, i, False)
+        #
+        #
+        # # Set up domain updater queue
+        # domain_update_queue = mp.Queue()
+        #
+        #
+        #
+        # # Start the domain update thread
+        # dq_thread = Thread(target=domain_queue_updater,
+        #                    args=(self.net, self.x, heuristic_dict,
+        #                          domain_update_queue, potential, lp_norm,
+        #                          self.bound_fxn, upper_bound_times, start_time,
+        #                          max_runtime))
+        # dq_thread.start()
+        #
+        # # Start max runtime thread
+        # if max_runtime is not None:
+        #     runtime_thread = Thread(target=max_runtime_thread,
+        #                             args=(start_time, max_runtime, sync_pq,
+        #                                   domain_update_queue,
+        #                                   pq_decision_bounds, status_dict))
+        # else:
+        #     dummy_thread = lambda: None
+        #     runtime_thread = Thread(target=dummy_thread)
+        # runtime_thread.start()
+
         ######################################################################
         #   Step 1: Set up things needed for multiprocessing                 #
         ######################################################################
 
         # Set up the priorityqueue
-        pq_manager = PQManager()
-        pq_manager.start()
-        sync_pq = pq_manager.PriorityQueue()
+        # pq_manager = PQManager()
+        # pq_manager.start()
 
-        pq_decision_bounds = pq_manager.PriorityQueue()
+        # sync_pq = pq_manager.PriorityQueue()
+        sync_pq = PriorityQueue()
 
+        # pq_decision_bounds = pq_manager.PriorityQueue()
+        pq_decision_bounds = PriorityQueue()
         # Set up the seen_polytopes
-        manager = mp.Manager()
-        status_dict = manager.dict()
+        # manager = mp.Manager()
+        status_dict = {}  # manager.dict()
         status_dict['kill_max_runtime_thread'] = False
-        seen_polytopes = manager.dict()
-        missed_polytopes = manager.dict()
+        seen_polytopes = {}  # manager.dict()
+        missed_polytopes = {}  # manager.dict()
         if collect_graph:
-            polytope_graph = manager.dict()
+            polytope_graph = {}  # manager.dict()
         else:
             polytope_graph = None
 
         # Set up heuristic dicts
-        heuristic_dict = manager.dict()
+        heuristic_dict = {}  # manager.dict()
         heuristic_dict['domain'] = self.domain
         heuristic_dict['dead_constraints'] = self.dead_constraints
 
@@ -391,11 +478,8 @@ class IncrementalGeoCertMultiProc(object):
         for i in range(num_proc):
             set_waiting_status(status_dict, i, False)
 
-
         # Set up domain updater queue
         domain_update_queue = mp.Queue()
-
-
 
         # Start the domain update thread
         dq_thread = Thread(target=domain_queue_updater,
@@ -415,6 +499,10 @@ class IncrementalGeoCertMultiProc(object):
             dummy_thread = lambda: None
             runtime_thread = Thread(target=dummy_thread)
         runtime_thread.start()
+
+
+
+
         ######################################################################
         #   Step 2: handle the initial polytope                              #
         ######################################################################
@@ -472,7 +560,10 @@ class IncrementalGeoCertMultiProc(object):
         if num_proc == 1:
             update_step_worker(*proc_args, **{'proc_id': 0})
         else:
-            procs = [mp.Process(target=update_step_worker,
+            # procs = [mp.Process(target=update_step_worker,
+            #                     args=proc_args, kwargs={'proc_id': i})
+            #          for i in range(num_proc)]
+            procs = [Thread(target=update_step_worker,
                                 args=proc_args, kwargs={'proc_id': i})
                      for i in range(num_proc)]
             [_.start() for _ in procs]
@@ -490,7 +581,7 @@ class IncrementalGeoCertMultiProc(object):
         overran_time = ((max_runtime is not None) and\
                         (time.time() - start_time > max_runtime))
         if problem_type == 'min_dist' and not overran_time:
-            best_decision_bound = pq_decision_bounds.get()
+            best_decision_bound = pq_decision_bounds.get_nowait()
         else:
             try:
                 best_decision_bound = pq_decision_bounds.get_nowait()
@@ -598,8 +689,8 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
         if problem_type in ['decision_problem', 'count_regions']:
             item = pqueue.get_nowait()
         else:
-            item = pqueue.get()
 
+            item = pqueue.get_nowait()
     except Empty:
         set_waiting_status(status_dict, proc_id, True)
         status_items = status_dict.items()
@@ -710,6 +801,7 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
     pq_elements_to_push = []
     fail_count = 0
     try_count = len(outputs)
+    print('try_count', try_count, pqueue.qsize())
     for facet, (dist, proj) in outputs:
 
         try:
@@ -743,6 +835,7 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
                      'projection': proj,
                      'facet_type': facet.facet_type}.items():
             setattr(new_pq_element, k, v)
+        # print("pushing...", facet.facet_type, dist)
         pq_elements_to_push.append(new_pq_element)
 
         if facet.facet_type == 'decision':
