@@ -853,8 +853,8 @@ def ranges_to_on_off_neurons(range_list):
     for bound in range_list:
         on_off_el = torch.LongTensor(bound.shape[0])
         on_off_el[:] = 0
-        on_off_el[bound[:,1] < 0] = -1
-        on_off_el[bound[:,0] >= 0] = 1
+        on_off_el[np.where(bound[:,1] < 0)] = -1
+        on_off_el[np.where(bound[:,0] >= 0)] = 1
         outputs.append(on_off_el)
     return outputs
 

@@ -25,7 +25,10 @@ def mip_solve(network, x, radius=None, problem_type='min_dist',
     """
 
     dom = Domain(x.numel(), x)
-    dom.set_original_hyperbox_bound(0.0, 1.0)
+    if box_bounds is not None:
+        dom.set_original_hyperbox_bound(*box_bounds)
+    else:
+        dom.set_original_hyperbox_bound(0.0, 1.0)
 
     assert problem_type in ['decision_problem', 'min_dist']
     if problem_type == 'decision_problem':
