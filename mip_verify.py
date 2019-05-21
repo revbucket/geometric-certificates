@@ -17,7 +17,8 @@ import time
 ##############################################################################
 
 
-def mip_solve_linf(network, x, radius=None, problem_type='min_dist'):
+def mip_solve(network, x, radius=None, problem_type='min_dist',
+              lp_norm='l_inf', box_bounds=None):
     """ Computes the decision problem for MIP :
     - first computes the LP for each neuron to get pre-relu actviations
     - then loops through all logits to compute decisions
@@ -29,7 +30,7 @@ def mip_solve_linf(network, x, radius=None, problem_type='min_dist'):
     assert problem_type in ['decision_problem', 'min_dist']
     if problem_type == 'decision_problem':
         assert radius is not None
-        dom.set_l_inf_upper_bound(radius)
+        dom.set_upper_bound(radius, lp_norm)
 
     # Build domain and shrink if only doing a decision problem
 
@@ -45,7 +46,7 @@ def mip_solve_linf(network, x, radius=None, problem_type='min_dist'):
     solved_models = []
 
     model = build_mip_model(network, x, dom, pre_relu_bounds,
-                            true_label, problem_type, radius)
+                            true_label, problem_type, radius, lp_norm)
 
     model.optimize()
 
@@ -58,7 +59,7 @@ def mip_solve_linf(network, x, radius=None, problem_type='min_dist'):
 
 
 def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
-                    problem_type, radius):
+                    problem_type, radius, lp_norm):
     """
     ARGS:
         network : plnn.PLNN - network we wish to compute bounds on
@@ -83,7 +84,7 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     # - build model, add variables and box constraints
     model = gb.Model()
     # model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
-
+    x_np = utils.as_numpy(x).reshape(-1)
 
 
 
@@ -92,9 +93,15 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
 
     box_bounds = zip(domain.box_low, domain.box_high)
     x_namer = build_var_namer('x')
-    var_dict = {'x': [model.addVar(lb=low, ub=high, name= x_namer(i))
-                                   for i, (low, high) in enumerate(box_bounds)]
-               }
+    x_vars = [model.addVar(lb=low, ub=high, name= x_namer(i))
+                for i, (low, high) in enumerate(box_bounds)]
+    var_dict = {'x': x_vars}
+
+    # if l_2, and the radius is not None, add those constraints as well
+    l2_norm = gb.quicksum((x_vars[i] - x_np[i]) * (x_vars[i] - x_np[i])
+                          for i in range(len(x_vars)))
+    model.addConstr(l2_norm <= radius ** 2)
+
     model.update()
 
 
@@ -129,9 +136,12 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     ##########################################################################
     add_adversarial_constraint(model, var_dict[output_var_name], true_label,
                                pre_relu_bounds[-1])
-    x_np = utils.as_numpy(x).reshape(-1)
 
-    add_l_inf_obj(model, x_np, var_dict['x'], problem_type)
+
+    if lp_norm == 'l_inf':
+        add_l_inf_obj(model, x_np, var_dict['x'], problem_type)
+    else:
+        add_l_2_obj(model, x_np, var_dict['x'], problem_type)
 
     model.update()
     return model
@@ -300,6 +310,19 @@ def add_l_inf_obj(model, x_np, x_vars, problem_type):
             model.addConstr(t_var >= val - x_vars[coord])
         model.setObjective(t_var, gb.GRB.MINIMIZE)
 
+    model.update()
+
+
+def add_l_2_obj(model, x_np, x_vars, problem_type):
+    """ Adds the constraint for the l2 norm case """
+    if problem_type == 'decision_problem':
+        model.setObjective(0, gb.GRB.MINIMIZE)
+    elif problem_type == 'min_dist':
+        t_var = model.addVar(lb=0, ub=gb.GRB.INFINITY, name='t')
+        l2_norm = gb.quicksum((x_vars[i] - x_np[i]) * (x_vars[i] - x_np[i])
+                              for i in range(len(x_vars)))
+        model.addConstr(l2_norm <= t_var)
+        model.setObjective(t_var, gb.GRB.MINIMIZE)
     model.update()
 
 

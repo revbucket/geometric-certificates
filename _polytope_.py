@@ -13,6 +13,15 @@ solvers.options['mosek'] = {iparam.log: 0,
 import copy
 import time
 
+class GurobiSquire(object):
+    """ Wrapper to hold attributes for the gurobi model since gb.Model won't let
+        me set attributes
+    """
+    def __init__(self):
+        pass
+
+
+
 
 ################################################################################
 #                           POLYTOPE CLASS                                     #
@@ -46,10 +55,11 @@ class Polytope(object):
         self.dead_constraints = dead_constraints
         self.gurobi = gurobi
         self.gurobi_model = None
+        self.gurobi_squire = None
         self.x_np = x_np
         self.linear_map = linear_map
         self.lipschitz_ub = lipschitz_ub
-
+        self.lipschitz_constrs = []
         if c_vector is None:
             self.c_vector = c_vector
         else:
@@ -267,6 +277,7 @@ class Polytope(object):
 
         model.setParam('OutputFlag', False)
         self.gurobi_model = model
+        self.gurobi_squire = GurobiSquire()
 
 
     def _is_feasible(self):
@@ -302,6 +313,7 @@ class Polytope(object):
                      domain=self.domain, facet_type=facet_type, x_np=self.x_np,
                      extra_tightness=extra_tightness,
                      gurobi_model=self.gurobi_model,
+                     gurobi_squire=self.gurobi_squire,
                      linear_map=self.linear_map,
                      lipschitz_ub=self.lipschitz_ub,
                      c_vector=self.c_vector)
@@ -342,7 +354,8 @@ class Polytope(object):
 class Face(Polytope):
     def __init__(self, poly_a, poly_b, tight_list, x_np, config=None,
                  domain=None, dead_constraints=None, removal_list=None,
-                 facet_type=None, gurobi_model=None, extra_tightness=None,
+                 facet_type=None, gurobi_model=None, gurobi_squire=None,
+                 extra_tightness=None,
                  linear_map=None, lipschitz_ub=None, c_vector=None):
         super(Face, self).__init__(poly_a, poly_b, x_np, config=config,
                                    domain=domain,
@@ -365,6 +378,7 @@ class Face(Polytope):
         self.facet_type = facet_type
 
         self.gurobi_model = gurobi_model
+        self.gurobi_squire = gurobi_squire
         self.extra_tightness = extra_tightness
 
         self.linear_map = linear_map
@@ -433,10 +447,10 @@ class Face(Polytope):
         v_vars = [v for v in self.gurobi_model.getVars()
                   if v.VarName.startswith('v')]
         # First do a hacky check to see if this model has already had LP setup
-        if self.gurobi_model.getVarByName('linf_dist_setup') is None:
-            # If hasn't been set up yet, set up the general LP constraints
-            self.gurobi_model.addVar(lb=0, ub=0, name='linf_dist_setup')
+        if not hasattr(self.gurobi_squire, 'linf_dist_setup'):
+            self.gurobi_squire.linf_dist_setup = True
 
+            # If hasn't been set up yet, set up the general LP constraints
             # --- add -t<= v_i <= t
             t = self.gurobi_model.getVarByName('t')
             for v_var in v_vars:
@@ -456,21 +470,17 @@ class Face(Polytope):
                 """
                 If self.lipschitz_ub is not None, then we incorporate this
                 objective as follows
-
                 Recall our setting is
                 min_{y in F} ||y -x|| + z
                     s.t. z >= |c_j^T(f(y) - f(DB))|  / L_j
                                                      for all j != true label
                     (and f(DB)=0 and c_j^Tf(y) >= 0 and linear)
-
                 Then we need to compute g_j(y) := c_j^Tf(y) / L_j
                 for each j (as a linear functional)
-
                 But the minimization works like (letting y = x + v)
                 min_{x+v in F} ||v||_infty + z
                 s.t. z >= c_j^Tf(x+v) / L_j
                 and c_j^Tf(x+v) = a_j^T(x +v) + b_j = a_j^Tv + (b_j + a_j^Tx)
-
                 so  z >= a_j^Tv + (b_j + a_j^Tx)
                 and if f(y) = Ay + b
                 where a_j := c_j^TA/L_j and b_j = c_j^Tb/L_j
@@ -489,12 +499,15 @@ class Face(Polytope):
                 # Then we can add the constraint of z to everything
                 # (lip_var >= a_j^T v + (b_j + a_j^Tx))
                 lip_var = self.gurobi_model.addVar(lb=0, name='lip_var')
+                lipschitz_constrs = []
                 for j in range(len(a_js)):
                     a_j, b_j = a_js[j], b_js[j]
                     linexpr_j = gb.LinExpr(a_j, v_vars)
                     const_j = b_j + a_j.dot(self.x_np)
-                    self.gurobi_model.addConstr(lip_var >= linexpr_j + const_j)
-                self.gurobi_model.setObjective(t + lip_var, gb.GRB.MINIMIZE)
+                    lip_constr = (lip_var >= linexpr_j + const_j)
+                    lipschitz_constrs.append(lip_constr)
+                self.gurobi_squire.lipschitz_constrs = lipschitz_constrs
+
 
             self.gurobi_model.update()
 
@@ -517,20 +530,44 @@ class Face(Polytope):
         self.gurobi_model.addConstr(gb.LinExpr(tight_row, v_vars) == tight_b,
                                     name='facet')
 
-        # And solve and return the value, output
-        self.gurobi_model.update()
-        self.gurobi_model.optimize()
+        # Now branch to handle the lipschitz cases...
+        t_var = self.gurobi_model.getVarByName('t')
+        if self.lipschitz_ub is None:
+            self.gurobi_model.setObjective(t_var, gb.GRB.MINIMIZE)
+            self.gurobi_model.update()
+            self.gurobi_model.optimize()
+            if self.gurobi_model.Status != 2:
+                return None, None
+            else:
+                obj_value = self.gurobi_model.getObjective().getValue()
+                opt_point =  self.x_np + np.array([v.X for v in v_vars])
+                return obj_value, opt_point
 
-        if self.gurobi_model.Status == 2: # OPTIMAL STATUS
-            # --- get objective
-            obj_value = self.gurobi_model.getObjective().getValue()
-            # print("OBJ", self.tight_list, obj_value)#, cons_term)
-            # --- get variables and add to x
-            opt_point =  self.x_np + np.array([v.X for v in v_vars])
-            return obj_value, opt_point
+        lip_var = self.gurobi_model.getVarByName('lip_var')
+        self.gurobi_model.setObjective(t_var + lip_var, gb.GRB.MINIMIZE)
+        objs_opts = []
+        opt_times = []
+        for lip_constr in self.gurobi_squire.lipschitz_constrs:
+            try:
+                self.gurobi_model.remove(self.gurobi_model.getConstrByName('lipschitz'))
+            except gb.GurobiError:
+                pass
+            start_time = time.time()
+            self.gurobi_model.addConstr(lip_constr)
+            self.gurobi_model.update()
+            self.gurobi_model.optimize()
+            opt_times.append('%.04f' % (time.time() - start_time))
 
-        else:
-            return None, None
+            if self.gurobi_model.Status == 3:
+                return None, None
+            objs_opts.append((self.gurobi_model.getObjective().getValue(),
+                              np.array([v.X for v in v_vars])))
+        # print("OPT TIMES: ", ' '.join(opt_times))
+
+        min_pair = min(objs_opts, key=lambda pair: pair[0])
+        return min_pair[0], min_pair[1] + self.x_np
+
+
 
 
 

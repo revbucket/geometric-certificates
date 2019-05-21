@@ -104,7 +104,10 @@ class Domain(object):
         if bound is None:
             return
         assert self.x is not None
-        self.l2_radius = bound
+        if self.l2_radius is not None:
+            self.l2_radius = min([bound, self.l2_radius])
+        else:
+            self.l2_radius = bound
         # also update box constraints if we can
         self._add_box_constraint(self.x - bound, self.x + bound)
 
