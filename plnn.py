@@ -292,8 +292,10 @@ class PLNN(nn.Module):
     def fast_lip_all_vals(self, x, l_q, on_off_neurons):
         """ Does the fast_value for all possible c's """
         num_logits = self.fcs[-1].out_features
-
-        true_label = self(x).max(1)[1].item()
+        if not isinstance(x, torch.Tensor):
+            true_label = self(torch.Tensor(x)).max(1)[1].item()
+        else:
+            true_label = self(x).max(1)[1].item()
 
         c_vecs, lip_values = [], []
         for i in range(num_logits):
