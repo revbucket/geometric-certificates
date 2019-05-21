@@ -91,6 +91,7 @@ class PQElement:
         return self.priority < other.priority
 
 
+
 class PQManager(SyncManager):
     pass
 
@@ -344,7 +345,7 @@ class IncrementalGeoCertMultiProc(object):
                                        extra_attack_kwargs=compute_upper_bound)
                 adv_bound, adv_ex, ub_time = ub_out
                 if adv_bound is not None:
-                    upper_bound_times.put((time.time() - start_time, adv_bound))
+                    upper_bound_times.append((time.time() - start_time, adv_bound))
         if problem_type in ['decision_problem', 'count_regions']:
             assert decision_radius is not None
             self.domain.set_upper_bound(decision_radius, lp_norm)
@@ -357,8 +358,9 @@ class IncrementalGeoCertMultiProc(object):
         # Set up the priorityqueue
         # pq_manager = PQManager()
         # pq_manager.start()
-        sync_pq = PriorityQueue() # pq_manager.PriorityQueue()
-        pq_decision_bounds = PriorityQueue() #pq_manager.PriorityQueue()
+        sync_pq = [] #PriorityQueue() # pq_manager.PriorityQueue()
+
+        pq_decision_bounds = [] # PriorityQueue() #pq_manager.PriorityQueue()
 
         # Set up the seen_polytopes
         #manager = mp.Manager()
@@ -449,13 +451,13 @@ class IncrementalGeoCertMultiProc(object):
 
         if problem_type == 'decision_problem':
             try:
-                best_decision_bound = pq_decision_bounds.get_nowait()
+                best_decision_bound = heapq.heappop(pq_decision_bounds)
                 best_dist = best_decision_bound.priority
                 best_example = best_decision_bound.projection
                 return (best_dist, adv_bound, adv_ex, best_example, ub_time,
                         seen_polytopes, missed_polytopes, polytope_graph,
                         lower_bound_times, upper_bound_times)
-            except Empty:
+            except IndexError:
                 pass
 
 
@@ -489,11 +491,11 @@ class IncrementalGeoCertMultiProc(object):
         overran_time = ((max_runtime is not None) and\
                         (time.time() - start_time > max_runtime))
         if problem_type == 'min_dist' and not overran_time:
-            best_decision_bound = pq_decision_bounds.get()
+            best_decision_bound = heapq.heappop(pq_decision_bounds)
         else:
             try:
-                best_decision_bound = pq_decision_bounds.get_nowait()
-            except:
+                best_decision_bound = heapq.heappop(pq_decision_bounds)
+            except IndexError:
                 if overran_time:
                     print("TIMEOUT")
                 elif problem_type == 'decision_problem':
@@ -537,8 +539,6 @@ def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
     assert problem_type in ['min_dist', 'decision_problem', 'count_regions']
     # with everything set up, LFGD
     while True:
-
-
         output = update_step_loop(piecewise_net, x, true_label, pqueue,
                                   seen_polytopes, heuristic_dict,
                                   lp_norm, domain_update_queue,
@@ -604,27 +604,24 @@ def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
     #   Step 1: pop something off the queue                                  #
     ##########################################################################
     try:
-        if problem_type in ['decision_problem', 'count_regions']:
-            item = pqueue.get_nowait()
-        else:
-            item = pqueue.get()
-    except Empty:
+        item = heapq.heappop(pqueue)
+    except IndexError:
         return False
 
-    if item.priority < 0: # Termination condition -- bubble up the termination
+    #priority, config, tight_constraint, proj, facet_type = item
+    if item.priority < 0: #item.priority < 0: # Termination condition -- bubble up the termination
         return False
     if item.facet_type == 'decision': # Termination condition -- bubble up
-        pq_decision_bounds.put(item)
+        heapq.heappush(pq_decision_bounds, item)
+        #pq_decision_bounds.put(item)
 
         return False
 
     # Update the lower bound queue
     lower_bound_times.append(((time.time() - start_time), item.priority))
 
-    config = item.config
-    tight_constraint = item.tight_constraint
 
-    new_configs = utils.get_new_configs(config, tight_constraint)
+    new_configs = utils.get_new_configs(item.config, item.tight_constraint)
     if utils.flatten_config(new_configs) in seen_polytopes:
         return True # No need to go further, but don't terminate!
     else:
@@ -744,13 +741,15 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
                      'projection': proj,
                      'facet_type': facet.facet_type}.items():
             setattr(new_pq_element, k, v)
+        #new_pq_element = (dist, new_poly.config, facet.tight_list[0],
+        #                  proj, facet.facet_type)
         pq_elements_to_push.append(new_pq_element)
 
         if facet.facet_type == 'decision':
 
             if problem_type == 'decision_problem':
                 # If in decision_problem style, just return
-                pq_decision_bounds.put(new_pq_element)
+                heapq.heappush(pq_decision_bounds, new_pq_element)
                 return True
 
 
@@ -769,7 +768,8 @@ def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
 
     # -- push objects to priority queue
     for pq_element in pq_elements_to_push:
-        pqueue.put(pq_element)
+        heapq.heappush(pqueue, pq_element)
+
 
     # -- call the update domain to try and compute tighter stable neurons
     if updated_domain:
