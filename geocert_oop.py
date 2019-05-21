@@ -188,7 +188,8 @@ class IncrementalGeoCert(object):
         #   First save the kwargs                                    #
         ##############################################################
         self.net = net
-        config_map = {'serial': Polytope.generate_facets_configs,
+        #TODO: hacked this
+        config_map = {'serial': Polytope.generate_facets_configs_parallel,
                       'parallel': Polytope.generate_facets_configs_parallel}
         self.facet_config_fxn = config_map[config_fxn]
         if config_fxn_kwargs is None:

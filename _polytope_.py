@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import scipy.optimize as opt
 from collections import defaultdict
+import math
 
 import gurobipy as gb
 from mosek import iparam
@@ -604,7 +605,7 @@ class Face(Polytope):
 
         if self.gurobi_model.Status == 2: # OPTIMAL STATUS
             # --- get objective
-            obj_value = self.gurobi_model.getObjective().getValue()
+            obj_value = math.sqrt(self.gurobi_model.getObjective().getValue())
 
             # --- get variables and add to x
             opt_point =  self.x_np + np.array([v.X for v in v_vars])
