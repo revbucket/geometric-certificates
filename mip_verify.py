@@ -17,7 +17,7 @@ import time
 ##############################################################################
 
 
-def mip_solve(network, x, radius=None, problem_type='min_dist',
+def mip_solve_linf(network, x, radius=None, problem_type='min_dist',
               lp_norm='l_inf', box_bounds=None):
     """ Computes the decision problem for MIP :
     - first computes the LP for each neuron to get pre-relu actviations
@@ -36,8 +36,6 @@ def mip_solve(network, x, radius=None, problem_type='min_dist',
         dom.set_upper_bound(radius, lp_norm)
 
     # Build domain and shrink if only doing a decision problem
-
-
 
     start = time.time()
     pre_relu_bounds = full_lp.compute_full_lp_bounds(network, dom,
