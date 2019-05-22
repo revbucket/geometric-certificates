@@ -24,7 +24,7 @@ def retrieve_adv_from_mip(model):
 
 
 def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
-                          radius_list=None):
+                          radius_list=None, timeout=None):
     if radius_list is None:
         radius_list = {'l_inf': [0.01, 0.05, 0.10, 0.20, 0.30, 0.40],
                        'l_2': [0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]}[lp_norm]
@@ -33,10 +33,13 @@ def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
         print('-' * 20, 'STARTING RADIUS ', radius, '-' * 20)
         mip_out = mip_solve(network, x, radius=radius, problem_type='min_dist',
                             lp_norm=lp_norm, box_bounds=box_bounds,
-                            force_radius=True)
+                            force_radius=True, timeout=timeout)
         if mip_out.Status == 3:
             print("-" * 20, "Infeasible on radius: ", radius, "-" * 20)
             print('\n' * 3)
+        if mip_out.Status == 9: #timeout code
+            # If TimeLimit reached here then we probably can't do any better
+            return mip_out
         if mip_out.Status == 2:
             return mip_out
 
@@ -44,7 +47,7 @@ def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
 
 def mip_solve(network, x, radius=None, problem_type='min_dist',
               lp_norm='l_inf', box_bounds=None, force_radius=False,
-              bound_fxn='full_lp'):
+              bound_fxn='full_lp', timeout=None):
     """ Computes the decision problem for MIP :
     - first computes the LP for each neuron to get pre-relu actviations
     - then loops through all logits to compute decisions
@@ -83,7 +86,8 @@ def mip_solve(network, x, radius=None, problem_type='min_dist',
     solved_models = []
 
     model = build_mip_model(network, x, dom, pre_relu_bounds,
-                            true_label, problem_type, radius, lp_norm)
+                            true_label, problem_type, radius, lp_norm,
+                            timeout=timeout)
 
     model.optimize()
 
@@ -96,7 +100,7 @@ def mip_solve(network, x, radius=None, problem_type='min_dist',
 
 
 def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
-                    problem_type, radius, lp_norm):
+                    problem_type, radius, lp_norm, timeout=None):
     """
     ARGS:
         network : plnn.PLNN - network we wish to compute bounds on
@@ -121,6 +125,8 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     # - build model, add variables and box constraints
     model = gb.Model()
     model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
+    if timeout is None:
+        model.setParam('TimeLimit', timeout)
     model.setParam('Threads', 1) # Fair comparisions -- we only use 1 thread
     x_np = utils.as_numpy(x).reshape(-1)
 
