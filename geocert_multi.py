@@ -335,7 +335,8 @@ class IncrementalGeoCertMultiProc(object):
     def min_dist_multiproc(self, x, lp_norm='l_2', compute_upper_bound=False,
                            num_proc=1, optimizer='gurobi', potential='lp',
                            problem_type='min_dist', decision_radius=None,
-                           collect_graph=False, max_runtime=None):
+                           collect_graph=False, max_runtime=None,
+                           force_radius=False):
         ######################################################################
         #   Step 0: Clear and setup state                                    #
         ######################################################################
@@ -362,7 +363,8 @@ class IncrementalGeoCertMultiProc(object):
         if problem_type in ['decision_problem', 'count_regions']:
             assert decision_radius is not None
             self.domain.set_upper_bound(decision_radius, lp_norm)
-
+        if problem_type == 'min_dist' and force_radius:
+            self.domain.set_upper_bound(decision_radius, lp_norm)
 
         # ######################################################################
         # #   Step 1: Set up things needed for multiprocessing                 #

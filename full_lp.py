@@ -109,9 +109,6 @@ def compute_full_lp_bounds(network, domain, compute_logit_bounds=False):
         layer_no = num_pre_relu_layers
 
         post_key = 'fc%s_post' % (layer_no)
-        print('-' * 40)
-        print(len(network.fcs))
-        print(var_dict[post_key])
         logit_bounds = add_linear_layer_vars_constrs(network, layer_no, model,
                                                      var_dict, post_key,
                                                      all_pre_relu_bounds[-1],
@@ -151,8 +148,6 @@ def add_linear_layer_vars_constrs(network, layer_no, model, var_dict,
 
     # Read the parameters from the network
     fc_layer = network.fcs[layer_no]
-    print("LAYER", layer_no)
-    print(fc_layer.in_features, fc_layer.out_features)
     fc_weight = utils.as_numpy(fc_layer.weight)
     if fc_layer.bias is not None:
         fc_bias = utils.as_numpy(fc_layer.bias)
@@ -215,7 +210,7 @@ def add_relu_layer_vars_constrs(network, model, var_dict,
         else:
             # Handle the not-always-off cases
             pre_relu = var_dict[var_input_key][i]
-            post_relu_vars.append(model.addVar(lb=low, ub=high, name=var_name))
+            post_relu_vars.append(model.addVar(lb=0.0, ub=high, name=var_name))
             post_relu = post_relu_vars[-1]
             if low >= 0:
                 # Equality constraint in always-on-case

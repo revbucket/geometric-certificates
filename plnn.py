@@ -203,7 +203,7 @@ class PLNN(nn.Module):
         return self.fcs[-1](x) # No ReLu on the last one
 
 
-    def compute_interval_bounds(self, domain_obj):
+    def compute_interval_bounds(self, domain_obj, compute_logit_bounds=False):
         """ For each neuron computes a bound for the range of values each
             pre-ReLU can take.
         ARGS:
@@ -223,6 +223,8 @@ class PLNN(nn.Module):
         # setup + asserts
         assert all(box[:, 0] <= box[:, 1])
 
+        # Redoing this one more time
+
 
         # Redo this but doing it right :
         midpoint_matrix = torch.Tensor([[1.0], [1.0]]) / 2.0
@@ -230,20 +232,33 @@ class PLNN(nn.Module):
         returned_bounds = []
         dead_set = [] # list of tensors, 1 if always on or off
         working_bounds = box
-        for fc in self.fcs[:-1]:
-            weight, bias = fc.weight, fc.bias
-            midpoint = torch.matmul(working_bounds, midpoint_matrix)
-            const_term = torch.matmul(fc.weight, midpoint)
-            if bias is not None:
-                const_term += bias.view(-1, 1)
-            ranges = torch.matmul(working_bounds, ranges_matrix)
-            mapped_ranges = torch.matmul(abs(weight), ranges)
-            pre_relus = torch.cat((const_term - mapped_ranges,
-                                   const_term + mapped_ranges), dim=1)
-            returned_bounds.append(utils.as_numpy(pre_relus))
-            working_bounds = F.relu(pre_relus)
+        current_low, current_high = box[:, 0], box[:, 1]
 
-        return returned_bounds
+        if compute_logit_bounds:
+            layers_to_check = self.fcs
+        else:
+            layers_to_check = self.fcs[:-1]
+
+        for fc in layers_to_check:
+            weight, bias = fc.weight, fc.bias
+
+            weight_pos, weight_neg = utils.split_tensor_pos(weight)
+            new_high = (torch.matmul(weight_pos, current_high) +
+                        torch.matmul(weight_neg, current_low))
+            new_low = (torch.matmul(weight_pos, current_low) +
+                       torch.matmul(weight_neg, current_high))
+            if bias is not None:
+                new_high += bias
+                new_low += bias
+            returned_bounds.append(torch.stack([new_low, new_high], dim=1))
+
+            current_low = F.relu(new_low)
+            current_high = F.relu(new_high)
+
+
+        return [utils.as_numpy(_) for _ in returned_bounds]
+
+
 
 
 

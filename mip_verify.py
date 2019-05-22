@@ -36,7 +36,8 @@ def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
 
 
 def mip_solve(network, x, radius=None, problem_type='min_dist',
-              lp_norm='l_inf', box_bounds=None, force_radius=False):
+              lp_norm='l_inf', box_bounds=None, force_radius=False,
+              bound_fxn='full_lp'):
     """ Computes the decision problem for MIP :
     - first computes the LP for each neuron to get pre-relu actviations
     - then loops through all logits to compute decisions
@@ -56,10 +57,20 @@ def mip_solve(network, x, radius=None, problem_type='min_dist',
     # Build domain and shrink if only doing a decision problem
 
     start = time.time()
-    pre_relu_bounds = full_lp.compute_full_lp_bounds(network, dom,
+    if bound_fxn == 'full_lp':
+        pre_relu_bounds = full_lp.compute_full_lp_bounds(network, dom,
                                                      compute_logit_bounds=True)
 
-    print("COMPUTED FULL-LP BOUNDS IN %.03f seconds" % (time.time() - start))
+        print("COMPUTED FULL-LP BOUNDS IN %.03f seconds" % (time.time() - start))
+
+    if bound_fxn == 'ia':
+        # assert bound_fxn == 'ia'
+        pre_relu_bounds = network.compute_interval_bounds(dom,
+                                                      compute_logit_bounds=True)
+        print("COMPUTED IA BOUNDS IN %.03f seconds" % (time.time() - start))
+
+
+
     true_label = network(x).max(1)[1].item()
     num_logits = network(x).numel()
     solved_models = []
