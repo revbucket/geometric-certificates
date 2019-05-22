@@ -470,6 +470,7 @@ class IncrementalGeoCertMultiProc(object):
             c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp,
                                                              self.on_off_neurons)
             print("LIPSCHITZ CONSTANTS", lip_value)
+
         else:
             lip_value = None
             c_vector = None

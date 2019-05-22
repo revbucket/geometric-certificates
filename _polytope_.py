@@ -554,7 +554,7 @@ class Face(Polytope):
             except gb.GurobiError:
                 pass
             start_time = time.time()
-            self.gurobi_model.addConstr(lip_constr)
+            self.gurobi_model.addConstr(lip_constr, name='lipschitz')
             self.gurobi_model.update()
             self.gurobi_model.optimize()
             opt_times.append('%.04f' % (time.time() - start_time))
@@ -577,16 +577,55 @@ class Face(Polytope):
 
         v_vars = [v for v in self.gurobi_model.getVars()
                   if v.VarName.startswith('v')]
-        # Swap out the inequality constraints if any exist
+        t_var = self.gurobi_model.getVarByName('t')
+        ######################################################################
+        #   Do the setups if necessary                                       #
+        ######################################################################
+
+        if not hasattr(self.gurobi_squire, 'l2_dist_setup'):
+            self.gurobi_squire.l2_dist_setup = True
+            # If hasn't been setup yet, setup the objective
+
+            l2_obj = gb.quicksum(v * v for v in v_vars)
+            self.gurobi_model.addConstr(t_var * t_var >= l2_obj)
+
+
+            if self.lipschitz_ub is None:
+
+                self.gurobi_model.setObjective(t_var, gb.GRB.MINIMIZE)
+            else:
+                # First step is to compute the a_j/b_j for each c vector
+                lin_A = self.linear_map['A']
+                lin_b = self.linear_map['b']
+
+                a_js, b_js = [], []
+                for lip_val, c_vec in zip(self.lipschitz_ub, self.c_vector):
+                    a_js.append(c_vec.dot(lin_A) / lip_val)
+                    b_js.append(c_vec.dot(lin_b) / lip_val)
+
+                # Then we can add the constraint of z to everything
+                # (lip_var >= a_j^T v + (b_j + a_j^Tx))
+                lip_var = self.gurobi_model.addVar(lb=0, name='lip_var')
+                lipschitz_constrs = []
+                for j in range(len(a_js)):
+                    a_j, b_j = a_js[j], b_js[j]
+                    linexpr_j = gb.LinExpr(a_j, v_vars)
+                    const_j = b_j + a_j.dot(self.x_np)
+                    lip_constr = (lip_var >= linexpr_j + const_j)
+                    lipschitz_constrs.append(lip_constr)
+                self.gurobi_squire.lipschitz_constrs = lipschitz_constrs
+            self.gurobi_model.update()
+
+
+        ######################################################################
+        #   Swap out the tight facet if necessary                            #
+        ######################################################################
+
         try:
             self.gurobi_model.remove(self.gurobi_model.getConstrByName('facet'))
-            # if passes, then already set up
         except gb.GurobiError:
-            # if fails, then not set up yet
-            # --- add objective
-            obj_expr = gb.quicksum(v * v for v in v_vars)
-            self.gurobi_model.setObjective(obj_expr, gb.GRB.MINIMIZE)
-            self.gurobi_model.update()
+            pass
+        self.gurobi_model.update()
 
         # --- add facet constraint
         if self.facet_type == 'facet':
@@ -599,19 +638,57 @@ class Face(Polytope):
         self.gurobi_model.addConstr(gb.LinExpr(tight_row, v_vars) == tight_b,
                                     name='facet')
 
-        # Now solve and return value, output
-        self.gurobi_model.update()
-        self.gurobi_model.optimize()
+        ######################################################################
+        #   Now branch for the lipschitz cases                               #
+        ######################################################################
+        if self.lipschitz_ub is None:
+            self.gurobi_model.setObjective(t_var, gb.GRB.MINIMIZE)
+            self.gurobi_model.update()
+            self.gurobi_model.optimize()
+            if self.gurobi_model.Status != 2:
+                return None, None
+            else:
+                obj_value = self.gurobi_model.getObjective().getValue()
+                opt_point =  self.x_np + np.array([v.X for v in v_vars])
+                return obj_value, opt_point
 
-        if self.gurobi_model.Status == 2: # OPTIMAL STATUS
-            # --- get objective
-            obj_value = math.sqrt(self.gurobi_model.getObjective().getValue())
+        lip_var = self.gurobi_model.getVarByName('lip_var')
+        #print("LIPSCHITZ OBJ")
+        self.gurobi_model.setObjective(t_var + lip_var, gb.GRB.MINIMIZE)
+        objs_opts = []
+        opt_times = []
+        for lip_constr in self.gurobi_squire.lipschitz_constrs:
+            try:
+                self.gurobi_model.remove(self.gurobi_model.getConstrByName('lipschitz'))
+            except gb.GurobiError:
+                pass
+            start_time = time.time()
+            self.gurobi_model.addConstr(lip_constr, name='lipschitz')
+            self.gurobi_model.update()
+            self.gurobi_model.optimize()
+            opt_times.append('%.04f' % (time.time() - start_time))
 
-            # --- get variables and add to x
-            opt_point =  self.x_np + np.array([v.X for v in v_vars])
-            return obj_value, opt_point
-        else:
+            if self.gurobi_model.Status in [3, 4]:
+                return None, None
+
+            if self.gurobi_model.Status == 2:
+                objs_opts.append((self.gurobi_model.getObjective().getValue(),
+                                  np.array([v.X for v in v_vars])))
+            else:
+                if self.gurobi_model.Status == 12:
+                    self.gurobi_model.setObjective(t_var, gb.GRB.MINIMIZE)
+                    self.gurobi_model.update()
+                    self.gurobi_model.optimize()
+                    #print("GUROBI FAILED ONCE BUT NOW...")
+                    #print(self.gurobi_model.Status)
+                #print("GUROBI WHAT???", self.gurobi_model.Status)
+        #print("OPT TIMES: ", ' '.join(opt_times))
+        try:
+            min_pair = min(objs_opts, key=lambda pair: pair[0])
+        except:
             return None, None
+        return min_pair[0], min_pair[1] + self.x_np
+
 
 
 
