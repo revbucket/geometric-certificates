@@ -16,11 +16,18 @@ import time
 #                                                                            #
 ##############################################################################
 
+def retrieve_adv_from_mip(model):
+    return np.array([_.X for _ in model.getVars()
+                     if _.VarName.startswith('x[')])
+
+
+
+
 def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
                           radius_list=None):
     if radius_list is None:
         radius_list = {'l_inf': [0.01, 0.05, 0.10, 0.20, 0.30, 0.40],
-                       'l_2': [0.1, 0.5, 1.0, 1.5, 2.0]}[lp_norm]
+                       'l_2': [0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]}[lp_norm]
 
     for radius in radius_list:
         print('-' * 20, 'STARTING RADIUS ', radius, '-' * 20)
@@ -126,6 +133,11 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     x_namer = build_var_namer('x')
     x_vars = [model.addVar(lb=low, ub=high, name= x_namer(i))
                 for i, (low, high) in enumerate(box_bounds)]
+    for (low, high), xvar in zip(box_bounds, x_vars):
+        model.addConstr(xvar >= low)
+        model.addConstr(xvar <= high)
+
+
     var_dict = {'x': x_vars}
 
 
@@ -296,6 +308,7 @@ def add_adversarial_constraint(model, logit_vars, true_label, logit_bounds):
             continue
         target_labels.append(i)
 
+    print("ADVERSARIAL CONSTRAINTS ADDED ", len(target_labels))
 
     if len(target_labels) == 1:
         # Trivial case
