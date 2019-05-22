@@ -16,9 +16,27 @@ import time
 #                                                                            #
 ##############################################################################
 
+def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
+                          radius_list=None):
+    if radius_list is None:
+        radius_list = {'l_inf': [0.01, 0.05, 0.10, 0.20, 0.30, 0.40],
+                       'l_2': [0.1, 0.5, 1.0, 1.5, 2.0]}[lp_norm]
 
-def mip_solve_linf(network, x, radius=None, problem_type='min_dist',
-              lp_norm='l_inf', box_bounds=None):
+    for radius in radius_list:
+        print('-' * 20, 'STARTING RADIUS ', radius, '-' * 20)
+        mip_out = mip_solve(network, x, radius=radius, problem_type='min_dist',
+                            lp_norm=lp_norm, box_bounds=box_bounds,
+                            force_radius=True)
+        if mip_out.Status == 3:
+            print("-" * 20, "Infeasible on radius: ", radius, "-" * 20)
+            print('\n' * 3)
+        if mip_out.Status == 2:
+            return mip_out
+
+
+
+def mip_solve(network, x, radius=None, problem_type='min_dist',
+              lp_norm='l_inf', box_bounds=None, force_radius=False):
     """ Computes the decision problem for MIP :
     - first computes the LP for each neuron to get pre-relu actviations
     - then loops through all logits to compute decisions
@@ -31,7 +49,7 @@ def mip_solve_linf(network, x, radius=None, problem_type='min_dist',
         dom.set_original_hyperbox_bound(0.0, 1.0)
 
     assert problem_type in ['decision_problem', 'min_dist']
-    if problem_type == 'decision_problem':
+    if (problem_type == 'decision_problem') or (force_radius is True):
         assert radius is not None
         dom.set_upper_bound(radius, lp_norm)
 
@@ -84,7 +102,8 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     num_pre_relu_layers = len(network.fcs) - 1
     # - build model, add variables and box constraints
     model = gb.Model()
-    # model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
+    model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
+    model.setParam('Threads', 1) # Fair comparisions -- we only use 1 thread
     x_np = utils.as_numpy(x).reshape(-1)
 
 
@@ -98,11 +117,22 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
                 for i, (low, high) in enumerate(box_bounds)]
     var_dict = {'x': x_vars}
 
-    # if l_2, and the radius is not None, add those constraints as well
-    l2_norm = gb.quicksum((x_vars[i] - x_np[i]) * (x_vars[i] - x_np[i])
-                          for i in range(len(x_vars)))
-    model.addConstr(l2_norm <= radius ** 2)
 
+    if lp_norm == 'l_2':
+        diff_namer = build_var_namer('diff')
+        diff_vars = []
+        for i in range(len(x_vars)):
+            diff_var = model.addVar(lb=-gb.GRB.INFINITY, ub=gb.GRB.INFINITY,
+                                    name=diff_namer(i))
+            diff_vars.append(diff_var)
+            model.addConstr(diff_var == x_vars[i] - x_np[i])
+
+        l2_norm = gb.quicksum(diff_vars[i] * diff_vars[i]
+                              for i in range(len(diff_vars)))
+        model.addConstr(l2_norm <= radius ** 2)
+
+
+    # if l_2, and the radius is not None, add those constraints as well
     model.update()
 
 
