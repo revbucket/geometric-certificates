@@ -6,11 +6,11 @@ from collections import defaultdict
 import math
 
 import gurobipy as gb
-from mosek import iparam
+#from mosek import iparam
 from cvxopt import matrix, solvers
 solvers.options['show_progress'] = False
-solvers.options['mosek'] = {iparam.log: 0,
-                            iparam.max_num_warnings: 0}
+#solvers.options['mosek'] = {iparam.log: 0,
+#                            iparam.max_num_warnings: 0}
 import copy
 import time
 

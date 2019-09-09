@@ -10,24 +10,35 @@ from domains import Domain
 import time
 
 
+
+def looper(start, max_val):
+    current = start 
+    while current <= max_val:
+        yield current
+        current *= 2
+
+
 ##############################################################################
 #                                                                            #
 #                       MAIN SOLVER METHOD                                   #
 #                                                                            #
 ##############################################################################
 
-def retrieve_adv_from_mip(model):
-    return np.array([_.X for _ in model.getVars()
-                     if _.VarName.startswith('x[')])
-
-
-
-
-def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
-                          radius_list=None, timeout=None):
+def mip_min_dist(network, x, lp_norm='l_inf', box_bounds=None, radius_list=None, 
+                 timeout=None):
+    
     if radius_list is None:
-        radius_list = {'l_inf': [0.01, 0.05, 0.10, 0.20, 0.30, 0.40],
-                       'l_2': [0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]}[lp_norm]
+        # Do binary-increasing sequence of radii if none specified
+        radius_list = looper(*{'l_inf': (0.05, 1.0), 
+                               'l_2': (0.5, 10.0)}[lp_norm])
+
+    start_time = time.time() 
+
+    # First compute the pre-relus to be reused throughout:
+
+    # Then loop through all the radii until we either solve or timeout
+
+    
 
     for radius in radius_list:
         print('-' * 20, 'STARTING RADIUS ', radius, '-' * 20)
@@ -42,6 +53,18 @@ def mip_mindist_binsearch(network, x, lp_norm='l_inf', box_bounds=None,
             return mip_out
         if mip_out.Status == 2:
             return mip_out
+
+
+
+def mip_decision_problem(network, x, radius, lp_norm='l_inf', box_bounds=None):
+    pass
+
+
+def retrieve_adv_from_mip(model):
+    return np.array([_.X for _ in model.getVars()
+                     if _.VarName.startswith('x[')])
+
+
 
 
 
@@ -124,8 +147,8 @@ def build_mip_model(network, x, domain, pre_relu_bounds, true_label,
     num_pre_relu_layers = len(network.fcs) - 1
     # - build model, add variables and box constraints
     model = gb.Model()
-    model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
-    if timeout is None:
+    # model.setParam('OutputFlag', False) # -- uncomment to suppress gurobi logs
+    if timeout is not None:
         model.setParam('TimeLimit', timeout)
     model.setParam('Threads', 1) # Fair comparisions -- we only use 1 thread
     x_np = utils.as_numpy(x).reshape(-1)

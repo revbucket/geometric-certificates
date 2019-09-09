@@ -1,5 +1,4 @@
-"""  OOP refactor of geocert so I get a better feel for how the ICML
-    implementation went -mj (3/1/19)
+""" Object Oriented version of GeoCert
 """
 import sys
 import itertools
