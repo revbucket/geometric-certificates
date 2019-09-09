@@ -99,7 +99,7 @@ class PLNN(nn.Module):
 
         # Make all the adversarial_constraints:
 
-        # f(x) = Ax + b (in R^#logits)
+        #if(x) = Ax + b (in R^#logits)
         # adversarial constraints are:
         #   f_true(x) - f_j(x) = 0 (for all j != true)
         #  ~ which is ~
@@ -131,7 +131,7 @@ class PLNN(nn.Module):
 
 
     def compute_polytope_config(self, configs, comparison_form_flag=False,
-                                uncertain_constraints=None):
+                                uncertain_constraints=None, as_tensor=False):
 
         lambdas = [torch.diag(config) for config in configs]
         js = [torch.diag(-2 * config + 1) for config in configs]
@@ -152,6 +152,11 @@ class PLNN(nn.Module):
         for j, wk, bk in zip(js, wks, bks):
             a_stack.append(j.matmul(wk))
             b_stack.append(-j.matmul(bk))
+        if as_tensor:
+            return {'a_stack': a_stack, 
+                    'b_stack': b_stack,
+                    'total_a': wks[-1],
+                    'total_b': bks[-1]}
 
         polytope_A = utils.as_numpy(torch.cat(a_stack, dim=0))
         polytope_b = utils.as_numpy(torch.cat(b_stack, dim=0))
@@ -167,9 +172,14 @@ class PLNN(nn.Module):
                 'total_b': bks[-1]
                 }
 
-    def compute_polytope(self, x, comparison_form_flag=False):
+
+
+
+
+    def compute_polytope(self, x, comparison_form_flag=False, as_tensor=False):
         pre_relus, configs = self.relu_config(x, return_pre_relus=True)
-        poly_out = self.compute_polytope_config(configs, comparison_form_flag)
+        poly_out = self.compute_polytope_config(configs, comparison_form_flag, 
+                                                as_tensor=as_tensor)
         poly_out['pre_relus'] = pre_relus
         return poly_out
 
@@ -203,7 +213,8 @@ class PLNN(nn.Module):
         return self.fcs[-1](x) # No ReLu on the last one
 
 
-    def compute_interval_bounds(self, domain_obj, compute_logit_bounds=False):
+    def compute_interval_bounds(self, domain_obj, compute_logit_bounds=False,
+                                as_tensor=False):
         """ For each neuron computes a bound for the range of values each
             pre-ReLU can take.
         ARGS:
@@ -255,11 +266,88 @@ class PLNN(nn.Module):
             current_low = F.relu(new_low)
             current_high = F.relu(new_high)
 
+        if as_tensor:
+            return returned_bounds
+        else:
+            return [utils.as_numpy(_) for _ in returned_bounds]
 
-        return [utils.as_numpy(_) for _ in returned_bounds]
+
+    def compute_improved_ia_bounds(self, domain_obj):
+        """ Implements the improved interval bounds as presented here: 
+            https://arxiv.org/pdf/1809.03008.pdf (appendix C)
+            [also done with gradients pushed through so we can build RS loss ]
+
+            # CODE HEAVILY BORROWED FROM https://github.com/MadryLab/relu_stable/blob/master/models/MNIST_improved_ia.py
+            # (but we're transposed from that code)
+        """
+
+        box = domain_obj.box_to_tensor() 
+        init_lows = box[:, 0]
+        init_highs = box[:, 1]
+        assert all(init_lows <= init_highs) # assert lows less than highs        
+        layers_to_check = self.fcs[:-1] # set the 
+
+        intermed_lows, intermed_highs = [], []
+
+        # define the recursive call 
+        def recurs(layer_num, lows, highs, weights, biases):
+            assert len(lows) == len(highs) == len(weights) == len(biases) == layer_num
+            # current layer 
+            low = lows[0]
+            high = highs[0]
+            weight = weights[0] 
+            bias = biases[0] 
+
+            # Base case 
+            if layer_num == 1:            
+                weight_pos, weight_neg = utils.split_tensor_pos(weight)                
+                next_low = (torch.matmul(weight_pos, init_lows) + 
+                            torch.matmul(weight_neg, init_highs) + bias)
+                next_high = (toch.matmul(weight_pos, init_highs) + 
+                             torch.matmul(weight_neg, init_lows) + bias)
+                return next_low, next_high
+
+            # Recursive case 
+            prev_weight = weights[1] 
+            prev_bias = biases[1] 
+
+            
+            # Compute W_A, W_N (need to zero out COLUMNS here)
+            w_a = torch.matmul(weight, (low > 0).diag_embed())
+            w_n = weight - w_a 
+            w_n_pos, w_n_neg = utils.split_tensor_pos(w_n)
+
+            w_prod = torch.matmul(w_a, prev_weight)
+            b_prod = torch.matmul(w_a, prev_bias)
+
+            # Compute prev layer bounds 
+            prev_low = (torch.matmul(w_n_pos, low) + 
+                        torch.matmul(w_n_neg, high) + bias)
+            prev_high = (torch.matmul(w_n_pos, high) + 
+                         torch.matmul(w_n_neg, low) + bias) 
+
+            # Recurse
+            deeper_lows, deeper_highs = recurs(layer_num - 1, lows[1:], highs[1:], 
+                                               [w_prod] + weights[2:], 
+                                               [b_prod] + biases[2:])
+            return (prev_low + deeper_lows, prev_high + deeper_highs)
 
 
+        # compute the lower and upper bounds for all neurons 
+        running_lows = [init_lows]
+        running_highs = [init_highs]
+        running_weights = [self.fcs[0].weight]
+        running_biases = [self.fcs[0].bias] 
 
+        for layer_num, layer in enumerate(self.fcs[:-1]):
+            new_lows, new_highs = recurs(layer_num + 1, running_lows, running_highs, 
+                                         running_weights, running_biases)
+            running_lows = [new_lows] + running_lows
+            running_highs = [new_highs] + running_highs
+            running_weights = self.fcs[layer_num + 1].weight 
+            running_biases = self.fcs[layer_num + 1].bias 
+        return running_lows[::-1], running_highs[::-1]
+        
 
 
     def compute_full_lp_bounds(self, domain_obj):

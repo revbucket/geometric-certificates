@@ -80,8 +80,9 @@ global_tolerance = 1e-6
 
 def split_tensor_pos(tensor):
     """ Splits tensor into positive and negative terms """
-    pos_tensor = tensor.masked_fill(tensor < 0, 0.0)
-    neg_tensor = tensor - pos_tensor
+    zeros_like = torch.zeros_like(tensor)
+    pos_tensor = torch.max(tensor, zeros_like)
+    neg_tensor = torch.min(tensor, zeros_like)
 
     return pos_tensor, neg_tensor
 
@@ -558,9 +559,11 @@ def MVIE_ellipse(A, b):
 ##########################################################################
 
 def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
-                   xylim=5, ax=plt.axes(), linestyle='dashed', linewidth=0):
+                   xylim=5, ax=None, linestyle='dashed', linewidth=0):
     """Plots a list of polytopes which exist in R^2.
     """
+    if ax is None:
+        ax = plt.axes()
     if colors == None:
         colors = [np.random.rand(3) for _ in range(0, len(poly_list))]
 
@@ -595,9 +598,11 @@ def plot_polytopes_2d(poly_list, colors=None, alpha=1.0,
 
 
 def plot_facets_2d(facet_list, alpha=1.0,
-                   xylim=5, ax=plt.axes(), linestyle='solid', linewidth=3, color='black'):
+                   xylim=5, ax=None, linestyle='solid', linewidth=3, color='black'):
     """Plots a list of facets which exist as line segments in R^2
     """
+    if ax is None:
+        ax = plt.axes() 
     if(np.size(xylim)==1):
         xlim = [0, xylim]
         ylim = [0, xylim]
@@ -643,16 +648,20 @@ def plot_linf_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     rect = patches.Rectangle((x_0[0]-t, x_0[1]-t), 2*t, 2*t, linewidth=linewidth, edgecolor=edgecolor, facecolor='none')
     ax.add_patch(rect)
 
-def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=plt.axes()):
+def plot_l2_norm(x_0, t, linewidth=1, edgecolor='black', ax=None):
     """Plots l2 norm ball of size t centered at x_0 (only in R^2)
     """
+    if ax is None:
+        ax = plt.axes() 
     x_0 = as_numpy(x_0).reshape(2)
     circle = plt.Circle(x_0, t, color=edgecolor, fill=False)
     ax.add_artist(circle)
 
 
-def plot_hyperplanes(ub_A, ub_b, styles=None, ax=plt.axes()):
+def plot_hyperplanes(ub_A, ub_b, styles=None, ax=None):
     ''' Plots all hyperplanes defined by each constraint of ub_A and ub_b'''
+    if ax is None:
+        ax = plt.axes() 
 
     if styles is None:
         styles = ['-' for _ in range(0, np.shape(ub_A)[0])]
@@ -685,14 +694,18 @@ def get_color_dictionary(list):
 
     return color_dict
 
-def plot_line(slope, intercept, style, ax=plt.axes()):
+def plot_line(slope, intercept, style, ax=None):
     """Plot a line from slope and intercept"""
+    if ax is None:
+        ax = plt.axes() 
     axes = plt.gca()
     x_vals = np.array(axes.get_xlim())
     y_vals = intercept + slope * x_vals
     ax.plot(x_vals, y_vals, style, c='black')
 
-def plot_ellipse(P, c, ax=plt.axes()):
+def plot_ellipse(P, c, ax=None):
+    if ax is None:
+        ax = plt.axes() 
     theta = np.linspace(0, 2 * np.pi, 100)
     x = P[0][0] * np.cos(theta) + P[0][1] * np.sin(theta) + c[0]
     y = P[1][0] * np.cos(theta) + P[1][1] * np.sin(theta) + c[1]
