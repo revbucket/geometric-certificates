@@ -22,8 +22,6 @@ class GurobiSquire(object):
         pass
 
 
-
-
 ################################################################################
 #                           POLYTOPE CLASS                                     #
 #                                                                              #
@@ -102,21 +100,23 @@ class Polytope(object):
 
         NOTES: Most naive implementation, and uses no heuristics.
                Doesn't care about domain, is very slow, and not useful for
-               verifying nets. Useful in Batch implementation though
+               verifying neural nets. Useful in Batch implementation though
         """
         num_constraints = self.ub_A.shape[0]
         facets = []
 
         for i in range(num_constraints):
-            facet = Face(self.ub_A, self.ub_b, [i])
-            if check_feasible:
-                check = facet.check_feasible()
-                if check: facets.append(facet)
+            facet = Face(self.ub_A, self.ub_b, [i], None)
+            if not check_feasible:
+                facets.append(facet)
+            else:
+                if facet._is_feasible():
+                    facets.append(facet)
         return facets
 
 
 
-    def generate_facets_configs_parallel(self, seen_dict, missed_dict=None):
+    def generate_facets_configs(self, seen_dict, missed_dict=None):
         """ Does Facet checking in parallel using joblib to farm out multiple
             jobs to various processes (possibly on differing processors)
         NOTES:
@@ -193,7 +193,7 @@ class Polytope(object):
         ####################################################################
         #   Step 5: Set up the Gurobi model for reusable optimization      #
         ####################################################################
-        self._build_gurobi_model()#indices_to_include=potential_facets)
+        self._build_gurobi_model()
 
         ######################################################################
         #   Step 6: Construct the facet objects                              #
@@ -567,9 +567,6 @@ class Face(Polytope):
 
         min_pair = min(objs_opts, key=lambda pair: pair[0])
         return min_pair[0], min_pair[1] + self.x_np
-
-
-
 
 
     def l2_dist_gurobi(self, x):

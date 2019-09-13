@@ -1,5 +1,5 @@
 *.pyc
-
+*.pkl
 *.idea/
 
 *.ipynb_checkpoints
@@ -8,5 +8,8 @@ scratch/*
 
 __pycache__/
 plots/*
+
+gurobi.log
+examples/gurobi.log
 
 .DS_Store
