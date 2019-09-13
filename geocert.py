@@ -1,296 +1,939 @@
-""" File that contains the algorithm for geometric certificates in piecewise
-    linear neural nets or general unions of perfectly glued polytopes
-
+"""  OOP refactor of geocert so I get a better feel for how the ICML
+    implementation went -mj (3/1/19)
 """
+import sys
+import itertools
+sys.path.append('mister_ed')
+import adversarial_perturbations as ap
+import prebuilt_loss_functions as plf
+
+import prebuilt_loss_functions as plf
+import loss_functions as lf
+import adversarial_attacks as aa
+import utils.pytorch_utils as me_utils
 
 from _polytope_ import Polytope, Face
 import utilities as utils
+from domains import Domain
+from plnn import PLNN
 import torch
 import numpy as np
 import heapq
+import time
 import matplotlib.pyplot as plt
 
-##############################################################################
-#                                                                            #
-#                               BATCHED GEOCERT                              #
-#                                                                            #
-##############################################################################
+import torch.nn.functional as F
+import joblib
+import multiprocessing as mp
 
-# Batched algorithm is when the union of polytopes is specified beforehand
-
-def batch_GeoCert(polytope_list, x, norm='l_2', comp_method='slow'):
-    """ Computes the linf distance from x to the boundary of the union of polytopes
-
-        Norm options: {inf | 2}
-        Comparison method options: {slow | unstable | fast_ReLu}
-    """
-
-    # First check if x is in one of the polytopes
-    if not any(poly.is_point_feasible(x) for poly in polytope_list):
-        return -1
-
-    print('----------Computing Boundary----------')
-    boundary, shared_facets = compute_boundary_batch(polytope_list, comp_method)
-
-    if norm == 'l_inf':
-        dist_to_boundary = [facet.linf_dist(x)[0] for facet in boundary]
-    elif norm == 'l_2':
-        dist_to_boundary = [facet.l2_dist(x)[0] for facet in boundary]
-
-
-    return min(dist_to_boundary), boundary, shared_facets
-
-
-def compute_boundary_batch(polytope_list, comparison_method = 'slow'):
-    """ Takes in a list of polytopes and outputs the facets that define the
-        boundary
-    """
-
-    total_facets = [facet for poly in polytope_list for facet in poly.generate_facets(check_feasible=True)]
-
-    print('num total facets:', len(total_facets))
-
-    unshared_facets = []
-    shared_facets = []
-
-
-    for og_facet in total_facets:
-
-        if comparison_method == 'slow':
-            bool_unshared = [og_facet.check_same_facet_pg_slow(ex_facet)
-                             for ex_facet in unshared_facets]
-
-            bool_shared = [og_facet.check_same_facet_pg_slow(ex_facet)
-                           for ex_facet in shared_facets]
-
-        elif comparison_method == 'unstable':
-            bool_unshared = [og_facet.check_same_facet_pg(ex_facet)
-                   for ex_facet in unshared_facets]
-            bool_shared = [og_facet.check_same_facet_pg(ex_facet)
-                   for ex_facet in shared_facets]
-
-        elif comparison_method == 'fast_ReLu':
-            # Uses information of ReLu activations to check if two facets
-            # are the same
-            bool_unshared = [og_facet.check_same_facet_config(ex_facet)
-                   for ex_facet in unshared_facets]
-            bool_shared = [og_facet.check_same_facet_config(ex_facet)
-                   for ex_facet in shared_facets]
-        else:
-            raise NotImplementedError
-
-        if any(bool_shared):
-            continue
-        elif any(bool_unshared):
-            index = bool_unshared.index(True)
-            shared_facet = unshared_facets[index]
-            unshared_facets.remove(shared_facet)
-            shared_facets.append(shared_facet)
-        else:
-            unshared_facets.append(og_facet)
-
-    return unshared_facets, shared_facets
+from dataclasses import dataclass, field
+from typing import Any
+from multiprocessing.managers import SyncManager
+from threading import Thread
+from queue import PriorityQueue, Empty
 
 
 
-##########################################################################
-#                                                                        #
-#                           INCREMENTAL GEOCERT                          #
-#                                                                        #
-##########################################################################
+""" Different from the standard Geocert in that we use multiprocessing
 
-class HeapElement(object):
-    """ Wrapper of the element to be pushed around the priority queue
-        in the incremental algorithm
-    """
-    def __init__(self, lp_dist, facet,
-                 decision_bound=False,
-                 exact_or_estimate='exact'):
-        self.lp_dist = lp_dist
-        self.facet = facet
-        self.decision_bound = decision_bound
-        self.exact_or_estimate = exact_or_estimate
+
+    Multiprocessing flow works like this:
+    - First compute the domain and upper bounds and all that nonsense
+    - Next handle the first linear region locally to push some stuff onto the
+      pq
+
+    - Initialize a bunch of processes that have two phases:
+        PROCESS SETUP:
+            - load a copy of the net
+            - keep track of the most recent domain
+            - keep track of the true label
+
+        PROCESS LOOP:
+            - Reread and copy the domain onto memory
+            - Reread and copy the dead neurons onto memory
+
+            - Given an element off the queue (config + tight constraint),
+              list all the facets that would need to be added to the PQ
+            - quickly reject what we can (using domain knowledge)
+            - quickly reject what we can (using the shared seen-dict)
+            - compute feasible/domain bounds on everything else
+            - make the new feasible domains available to the main pq
+
+        TERMINATION:
+            - if popped adversarial constraint,
+    SHARED MEMORY:
+        - domain
+        - seen_to_polytope_map
+        - dead_neurons
+        - valid domain
+        - priority queue
+
+    LOCAL PROCESS MEMORY :
+        - net
+
+
+"""
+
+############################################################################
+#                                                                          #
+#                           HELPER CLASSES                                 #
+#                                                                          #
+############################################################################
+
+def verbose_print(*args, verbose=True):
+    if verbose:
+        print(*args)
+
+
+class PQElement:
+    priority: float # IS THE LP DIST OR 'POTENTIAL' VALUE
+    config: Any=field(compare=False) # Configs for neuron region
+    tight_constraint: Any=field(compare=False) # which constraint is tight
+    facet_type: Any=field(compare=False) # is decision or nah?
+    projection: Any=field(compare=False)
 
     def __lt__(self, other):
-        return self.lp_dist < other.lp_dist
+        return self.priority < other.priority
 
 
-def incremental_GeoCert(lp_norm, net, x, ax, plot_dir, n_colors=200, plot_iter=1):
-    """ Computes l_inf distance to decision boundary in incremental steps of
-        expanding the search space
+class GeoCertReturn:
+    """ Object that encapsulates the output from GeoCert """
+    def __init__(self, original=None, original_shape=None, 
+                 best_dist=None, best_ex=None, adv_bound=None,
+                 adv_ex=None, seen_polytopes=None, missed_polytopes=None,
+                 polytope_graph=None, lower_bound_times=None,
+                 upper_bound_times=None, status=None, problem_type=None,
+                 radius=None, num_regions=None):
 
-        lp_norm: options include    =>  {'l_2' | 'l_inf'}
+        self.original = original
+        self.original_shape = original_shape
+
+        # If computed the minimal distance adversarial example...
+        self.best_dist = best_dist # this is the distance
+        self.best_ex = best_ex  # and this is the example itself
+
+        # If Upper bound Adv.Attack was performed...
+        self.adv_bound = adv_bound # this is the adv.ex distance
+        self.adv_ex = adv_ex  # this is the adversarial example itself
+
+        # dict of binary strings corresponding to feasible polytopes seen by geocert
+        self.seen_polytopes = seen_polytopes
+
+        # dict of binary strings corresponding to infeasible polytopes checked
+        self.missed_polytopes = missed_polytopes
+
+        # dict of pairs of binary strings representing the edges of the graph
+        self.polytope_graph = polytope_graph
+
+        # list of pairs of (time, lower/upper_bound)
+        self.lower_bound_times = lower_bound_times
+        self.upper_bound_times = upper_bound_times
+
+        self.status = status # return status ['TIMEOUT', 'FAILURE', 'SUCCESS']
+        self.problem_type = problem_type # in ['min_dist', 'decision_problem', 'count_regions']
+
+        self.radius = radius
+        self.num_regions = num_regions
+
+    def __repr__(self):
+        """ Method to print out results"""
+        output_str = 'GeoCert Return Object\n'
+        output_str += '\tProblem Type: ' + self.problem_type + '\n'
+        output_str += '\tStatus: %s\n' % self.status
+
+        if self.status == 'TIMEOUT':
+            return output_str
+
+        if self.problem_type == 'min_dist':
+            output_str += '\tRobustness: %.04f' % self.best_dist
+        elif self.problem_type in ['decision_problem', 'count_regions']:
+            output_str += '\tRadius %.02f\n' % self.radius
+            if self.problem_type == 'count_regions':
+                output_str += '\tNum Linear Regions: %s' % self.num_regions
+        return output_str
+
+    def display_images(self, include_diffs=True, include_pgd=False,
+                       figsize=(12, 12)):
+        """ Shorthand method to display images found by GeoCert.
+            Useful when doing things with GeoCert in jupyter notebooks
+        ARGS:
+            include_diffs : boolean - if True, we'll display the differences
+                            between the original and GeoCert image
+                            (diffs scaled up by 5x!)
+            include_pgd : boolean - if True, we'll also display the image
+                          found by PGD (useful upper bound)
+        RETURNS:
+            None, but inline displays the images in the order
+            [original | diff | geoCert | PGD]
+        """
+        if self.best_ex is None:
+            # No Geocert image => do nothing
+            return
+
+        # Build the display row of numpy elements
+        original_np = utils.as_numpy(self.original.reshape(self.original_shape))
+        best_ex_np = utils.as_numpy(self.best_ex.reshape(self.original_shape))
+        display_row = [original_np, best_ex_np]
+        label_row = ['original', 'geoCert']
+        if include_diffs:
+            diff_np = np.clip(0.5 + (best_ex_np - original_np) * 5, 0.0, 1.0)
+            display_row.insert(1, diff_np)
+            label_row.insert(1, 'difference x5 (+0.5)')
+
+        if include_pgd and self.adv_ex is not None:
+            adv_ex_np = utils.as_numpy(self.adv_ex.reshape(self.original_shape))
+            display_row.append(adv_ex_np)
+            label_row.append('PGD')
+        # Make sure everything has three dimensions (CxHxW)
+        # --- determine if grayscale or not
+        grayscale = (original_np.squeeze().ndim == 2)
+        if grayscale:
+            num_channels = 1
+            imshow_kwargs = {'cmap': 'gray'}
+        else:
+            num_channels = 3
+            imshow_kwargs = {}
+
+        # --- determine height/width
+        h, w = original_np.squeeze().shape[-2:]
+
+        for i in range(len(display_row)):
+            display_row[i] = display_row[i].reshape((num_channels, h, w))
+
+        # Concatenate everything into a single row, and display
+        # --- concatenate row together
+        cat_row = np.concatenate(display_row, -1)
+        if grayscale: 
+            cat_row = cat_row.squeeze()
+        plt.figure(figsize=figsize, dpi=80, facecolor='w', edgecolor='k')
+        plt.axis('off')
+        plt.imshow(cat_row, **imshow_kwargs)
+
+        # -- add labels underneath the images
+        for label_idx, label in enumerate(label_row):
+            x_offset = (0.33 + label_idx) * w 
+            plt.text(x_offset, h + 1, label)
+        plt.show()
+
+
+
+
+
+
+##############################################################################
+#                                                                            #
+#       G                    MAIN GEOCERT CLASS                               #
+#                                                                            #
+##############################################################################
+
+class GeoCert(object):
+
+    bound_fxn_selector = {'ia': PLNN.compute_interval_bounds,
+                          'dual_lp': PLNN.compute_dual_lp_bounds,
+                          'full_lp': PLNN.compute_full_lp_bounds}
+
+    def __init__(self, net, hyperbox_bounds=None,
+                 verbose=True, neuron_bounds='ia',
+                 # And for 2d inputs, some kwargs for displaying things
+                 display=False, save_dir=None, ax=None):
+
+        """ To set up a geocert instance we need to know:
+        ARGS:
+            net : PLNN instance - the network we're verifying
+            hyperbox_bounds: if not None, is a tuple of pair of numbers
+                             (lo, hi) that define a valid hyperbox domain
+            neuron_bounds: string - which technique we use to compute
+                                    preactivation bounds. ia is interval
+                                    analysis, full_lp is the full linear
+                                    program, and dual_lp is the Kolter-Wong
+                                    dual approach
+            verbose: bool - if True, we print things
+            THE REST ARE FOR DISPLAYING IN 2D CASES
+        """
+        ##############################################################
+        #   First save the kwargs                                    #
+        ##############################################################
+        self.net = net
+        self.hyperbox_bounds = hyperbox_bounds
+        self.verbose = verbose
+        assert neuron_bounds in ['ia', 'dual_lp', 'full_lp']
+        self.neuron_bounds = neuron_bounds
+        self.bound_fxn = self.bound_fxn_selector[neuron_bounds]
+
+        # DISPLAY PARAMETERS
+        self.display = display
+        self.save_dir = save_dir
+        self.ax = ax
+
+
+        # And intialize the per-run state
+        self._reset_state()
+
+
+    def _reset_state(self):
+        """ Clears out the state of things that get set in a min_dist run """
+        # Things that are saved as instances for a run
+        self.lp_norm = None # filled in later
+        self.true_label = None # filled in later
+        self.lp_dist = None # filled in later
+        self.seen_to_polytope_map = {} # binary config str -> Polytope object
+        self.pq = [] # Priority queue that contains HeapElements
+        self.dead_constraints = None
+        self.on_off_neurons = None
+        self.domain = None # keeps track of domain and upper bounds
+        self.config_history = None # keeps track of all seen polytope configs
+
+        self.x = None
+        self.x_np = None
+
+
+    def _setup_state(self, x, lp_norm, potential):
+        """ Sets up the state to be used on a per-run basis
+        Shared between min_dist_multiproc and decision_problem_multiproc
+
+        Sets instance variables and does asserts
+        """
+        assert lp_norm in ['l_2', 'l_inf']
+        self.lp_norm = lp_norm
+        self.x = x
+        self.x_np = utils.as_numpy(x)
+        self.true_label = int(self.net(x).max(1)[1].item())
+        dist_selector = {'l_2'  : Face.l2_dist_gurobi,
+                         'l_inf': Face.linf_dist_gurobi}
+        self.lp_dist = dist_selector[self.lp_norm]
+        self.domain = Domain(x.numel(), x)
+        if self.hyperbox_bounds is not None:
+            self.domain.set_original_hyperbox_bound(*self.hyperbox_bounds)
+            self._update_dead_constraints()
+        assert potential in ['lp', 'lipschitz']
+        if self.net.layer_sizes[-1] > 2 and potential == 'lipschitz':
+            raise NotImplementedError("Lipschitz potential buggy w/ >2 classes!")
+
+
+    def _verbose_print(self, *args):
+        """ Print method that leverages self.verbose -- makes code cleaner """
+        if self.verbose:
+            print(*args)
+
+
+    def _compute_upper_bounds(self, x, true_label,
+                              extra_attack_kwargs=None):
+        """ Runs an adversarial attack to compute an upper bound on the
+            distance to the decision boundary.
+
+            In the l_inf case, we compute the constraints that are always
+            on or off in the specified upper bound
+
+        """
+        self._verbose_print("Starting upper bound computation")
+
+        start = time.time()
+        upper_bound, adv_ex = self._pgd_upper_bound(x, true_label, self.lp_norm,
+                                              extra_kwargs=extra_attack_kwargs)
+        ub_time = time.time() - start
+        if upper_bound is None:
+            self._verbose_print("Upper bound failed in %.02f seconds" % ub_time)
+
+        else:
+            self._verbose_print("Upper bound of %s in %.02f seconds" %
+                                (upper_bound, ub_time))
+            self._update_dead_constraints()
+
+        return upper_bound, adv_ex, ub_time
+
+
+    def _pgd_upper_bound(self, x, true_label, lp_norm, num_repeats=64,
+                         extra_kwargs=None):
+        """ Runs PGD attack off of many random initializations to help generate
+            an upper bound.
+
+            Sets self.upper_bound as the lp distance to the best (of the ones we
+            found) adversarial example
+
+            Also returns both the upper bound and the supplied adversarial
+            example
+        """
+
+        ######################################################################
+        #   Setup attack object                                              #
+        ######################################################################
+        norm = {'l_inf': 'inf', 'l_2': 2}[lp_norm]
+        linf_threat = ap.ThreatModel(ap.DeltaAddition, {'lp_style': 'inf',
+                                                        'lp_bound': 1.0})
+        normalizer = me_utils.IdentityNormalize()
+
+        loss_fxn = plf.VanillaXentropy(self.net, normalizer)
+
+        pgd_attack = aa.PGD(self.net, normalizer, linf_threat, loss_fxn,
+                            manual_gpu=False)
+        attack_kwargs = {'num_iterations': 1000,
+                         'random_init': 0.4,
+                         'signed': False,
+                         'verbose': False}
+
+        if isinstance(extra_kwargs, dict):
+            attack_kwargs.update(extra_kwargs)
+
+        ######################################################################
+        #   Setup 'minibatch' of randomly perturbed examples to try          #
+        ######################################################################
+
+        new_x = x.view(1, -1).repeat(num_repeats, 1)
+        labels = [true_label for _ in range(num_repeats)]
+        labels = torch.Tensor(labels).long()
+
+        # Use the GPU to build adversarial attacks if we can
+        USE_GPU = torch.cuda.is_available()
+        if USE_GPU:
+            new_x = new_x.cuda()
+            labels = labels.cuda()
+            self.net.cuda()
+
+
+        ######################################################################
+        #   Run the attack and collect the best (if any) successful example  #
+        ######################################################################
+
+        pert_out = pgd_attack.attack(new_x, labels, **attack_kwargs)
+        pert_out = pert_out.binsearch_closer(self.net, normalizer, labels)
+        success_out = pert_out.collect_successful(self.net, normalizer,
+                                          success_def='alter_top_logit')
+        success_idxs = success_out['success_idxs']
+        if USE_GPU:
+            best_adv = best_adv.cpu()
+            labels = labels.cpu()
+            self.net.cpu()
+
+        if success_idxs.numel() == 0:
+            return None, None
+
+        diffs = pert_out.delta.data.index_select(0, success_idxs)
+        max_idx = me_utils.batchwise_norm(diffs, norm, dim=0).min(0)[1].item()
+        best_adv = success_out['adversarials'][max_idx].squeeze()
+
+        # Set both l_inf and l_2 upper bounds
+        l_inf_upper_bound = (best_adv - x.view(-1)).abs().max().item()
+        self.domain.set_l_inf_upper_bound(l_inf_upper_bound)
+        l_2_upper_bound = torch.norm(best_adv - x.view(-1), p=2).item()
+        self.domain.set_l_2_upper_bound(l_2_upper_bound)
+
+        upper_bound = {'l_inf': l_inf_upper_bound,
+                       'l_2': l_2_upper_bound}[self.lp_norm]
+
+        return upper_bound, best_adv
+
+
+    def _update_dead_constraints(self):
+        # Compute new bounds
+        new_bounds = self.bound_fxn(self.net, self.domain)
+
+        # Change to dead constraint form
+        self.dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
+        self.on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
+
+
+    def run(self, x, lp_norm='l_2', compute_upper_bound=False,
+            potential='lp', problem_type='min_dist', decision_radius=None,
+            collect_graph=False, max_runtime=None):
+        """
+        Main method for running GeoCert. This method handles each of the three
+        problem types, as specified by the problem_type argument:
+            - min_dist : computes the minimum distance point (under the specified
+                         lp_norm), x', for which net(x) != net(x')
+            - decision_problem : answers yes/no whether or not an adversarial
+                                 example exists within a radius of decision_radius
+                                 from the specified point x. Will return early if
+                                 finds an adversarial example within the radius
+                                 (which may not be the one with minimal distance!)
+            - count_regions : like decision_problem, explores the region specified
+                              by decision_radius, but will not stop early and instead
+                              explore the entire region
+        ARGS:
+            x : numpy array or tensor - vector that we wish to certify
+                                        robustness for
+            lp_norm: string - needs to be 'l_2' or 'l_inf'
+            compute_upper_bound : None, True, or dict - if None, no upper bound
+                                  to pointwise robustness is computed. If not
+                                  None, should be either True (to use default
+                                  attack params) or a dict specifying extra
+                                  kwargs to use in the PGD attack (see examples)
+            potential : string - needs to be 'lp' or 'lipschitz', affects which
+                                 potential function to be used in ordering facets
+            problem_type : string - must be in ['min_dist', 'decision_problem',
+                                                'count_regions']
+            collect_graph: bool - if True, we collect the graph of linear regions
+                                  and return it
+            max_runtime : None or numeric - if not None, is a limit on the runtime
+        RETURNS:
+            GeoCertReturn object which has attributes regarding the output data
+
+
+        """
+        ######################################################################
+        #   Step 0: Clear and setup state                                    #
+        ######################################################################
+
+        # 0.A) Establish clean state for a new run
+        original_shape = x.shape 
+        x = x.view(-1)
+
+        self._reset_state() # clear out the state first
+        self._setup_state(x, lp_norm, potential)
+        start_time = time.time()
+
+
+        # 0.B) Setup objects to gather bound updates with timing info
+        # Upper bound times that the domain queue updater knows about
+        upper_bound_times = [] # (time, bound)
+        # Lower bound times that the workers know about
+        lower_bound_times = [] # (time, bound)
+
+
+        # 0.C) Compute upper bounds to further restrict search
+        adv_bound, adv_ex, ub_time = None, None, None
+        if problem_type == 'min_dist':
+            # If finding min dist adv.ex, possibly run a PGD attack first
+            if compute_upper_bound is not False:
+                ub_out = self._compute_upper_bounds(x, self.true_label,
+                                       extra_attack_kwargs=compute_upper_bound)
+                adv_bound, adv_ex, ub_time = ub_out
+                if adv_bound is not None:
+                    upper_bound_times.append((time.time() - start_time, adv_bound))
+                    self.domain.set_upper_bound(adv_bound, lp_norm)
+        if problem_type in ['decision_problem', 'count_regions']:
+            # If searching the entire provided domain, set up asymmetric domain
+            assert decision_radius is not None
+            self.domain.set_upper_bound(decision_radius, lp_norm)
+
+        # 0.D) Set up priority queues
+        sync_pq = []
+        pq_decision_bounds = []
+
+        # 0.E) Set up the objects to collect seen/missed polytopes and connections
+        seen_polytopes = {}
+        missed_polytopes = {}
+        if collect_graph:
+            polytope_graph = {}
+        else:
+            polytope_graph = None
+
+        # 0.F) Set up heuristic dicts to hold info on domain, fixed neurons,
+        #      and lipschitz constant
+        heuristic_dict = {}
+        heuristic_dict['domain'] = self.domain
+        heuristic_dict['dead_constraints'] = self.dead_constraints
+
+        if potential == 'lipschitz':
+            # Just assume binary classifiers for now
+            # on_off_neurons = self.net.compute_interval_bounds(self.domain, True)
+            dual_lp = utils.dual_norm(lp_norm)
+            c_vector, lip_value = self.net.fast_lip_all_vals(x, dual_lp,
+                                                             self.on_off_neurons)
+            self._verbose_print("LIPSCHITZ CONSTANTS", lip_value)
+            self._verbose_print(c_vector[0].dot(self.net(x).squeeze()) / lip_value[0])
+        else:
+            lip_value = None
+            c_vector = None
+        heuristic_dict['fast_lip'] = lip_value
+        heuristic_dict['c_vector'] = c_vector
+
+        # 0.G) Set up return object to be further populated later
+        # (mutable objects for all dynamic kwargs to GeoCertReturn make this ok)
+        return_obj = GeoCertReturn(original=x,
+                                   original_shape=original_shape,
+                                   best_dist=None,
+                                   best_ex=None,
+                                   adv_bound=adv_bound,
+                                   adv_ex=adv_ex,
+                                   seen_polytopes=seen_polytopes,
+                                   missed_polytopes=missed_polytopes,
+                                   polytope_graph=polytope_graph,
+                                   lower_bound_times=lower_bound_times,
+                                   upper_bound_times=upper_bound_times,
+                                   status=None,
+                                   problem_type=problem_type,
+                                   radius=decision_radius)
+        ######################################################################
+        #   Step 1: handle the initial polytope                              #
+        ######################################################################
+
+        # NOTE: The loop doesn't quite work here, so have to do the first part
+        #       (aka emulate update_step_build_poly) manually.
+        #       1) Build the original polytope
+        #       2) Add polytope to seen polytopes
+        #
+        self._verbose_print('---Initial Polytope---')
+        p_0_dict = self.net.compute_polytope(self.x)
+        p_0 = Polytope.from_polytope_dict(p_0_dict, self.x_np,
+                                          domain=self.domain,
+                                          dead_constraints=self.dead_constraints,
+                                          gurobi=True,
+                                          lipschitz_ub=lip_value,
+                                          c_vector=c_vector)
+        seen_polytopes[utils.flatten_config(p_0.config)] = True
+
+        update_step_handle_polytope(self.net, self.x_np, self.true_label,
+                                    sync_pq, seen_polytopes, self.domain,
+                                    self.dead_constraints, p_0, self.lp_norm,
+                                    pq_decision_bounds, potential, missed_polytopes,
+                                    problem_type, polytope_graph,
+                                    heuristic_dict, upper_bound_times,
+                                    start_time, max_runtime,
+                                    verbose=self.verbose)
+
+        if problem_type == 'decision_problem':
+            # If a decision problem and found a decision bound in the first polytope
+            # (which must also be in the 'restricted domain'), then we can return
+            try:
+                best_decision_bound = heapq.heappop(pq_decision_bounds)
+                # Will error here^ unless found a decision bound
+                return_obj.status = 'SUCCESS'
+                return return_obj # note, not guaranteed to be optimal!
+            except IndexError:
+                pass
+
+
+        ######################################################################
+        #   Step 2: Loop until termination                                   #
+        ######################################################################
+        proc_args = (self.net, self.x_np, self.true_label, sync_pq,
+                     seen_polytopes, heuristic_dict, self.lp_norm,
+                     pq_decision_bounds,
+                     potential, missed_polytopes, problem_type,
+                     polytope_graph, lower_bound_times, start_time,
+                     upper_bound_times, max_runtime)
+
+        update_step_worker(*proc_args, **{'proc_id': 0,
+                                          'verbose': self.verbose})
+
+
+        ######################################################################
+        #   Step 3: Collect the best thing in the decision queue and return  #
+        ######################################################################
+
+        overran_time = ((max_runtime is not None) and\
+                        (time.time() - start_time > max_runtime))
+        if overran_time:
+            return_obj.status = 'TIMEOUT'
+            return return_obj
+
+        if problem_type == 'min_dist':
+            best_decision_bound = heapq.heappop(pq_decision_bounds)
+        elif problem_type in ['decision_problem', 'count_regions']:
+            try:
+                best_decision_bound = heapq.heappop(pq_decision_bounds)
+            except IndexError:
+                if problem_type == 'decision_problem':
+                    self._verbose_print("DECISION PROBLEM FAILED")
+                    return_obj.status = 'FAILURE'
+                else:
+                    self._verbose_print("COUNTED %s LINEAR REGIONS" % len(seen_polytopes))
+                    return_obj.status = 'SUCCESS'
+                    return_obj.num_regions = len(seen_polytopes)
+                return return_obj
+
+        return_obj.best_dist = best_decision_bound.priority
+        return_obj.best_ex = best_decision_bound.projection
+        return_obj.status = 'SUCCESS'
+        return return_obj
+
+
+
+
+##############################################################################
+#                                                                            #
+#                           FUNCTIONAL VERSION OF UPDATES                    #
+#                            (useful for multiprocessing)                    #
+##############################################################################
+
+
+
+def update_step_worker(piecewise_net, x, true_label, pqueue, seen_polytopes,
+                       heuristic_dict, lp_norm,
+                       pq_decision_bounds, potential,
+                       missed_polytopes, problem_type,
+                       polytope_graph, lower_bound_times, start_time,
+                       upper_bound_times, max_runtime,
+                       proc_id=None, verbose=True):
+    """ Setup for the worker objects
+    ARGS:
+        network - actual network object to be copied over into memory
+        everything else is a manager
+    """
+    assert problem_type in ['min_dist', 'decision_problem', 'count_regions']
+    # with everything set up, LFGD
+    while True:
+        output = update_step_loop(piecewise_net, x, true_label, pqueue,
+                                  seen_polytopes, heuristic_dict,
+                                  lp_norm,
+                                  pq_decision_bounds,
+                                  potential, missed_polytopes,
+                                  problem_type, polytope_graph,
+                                  lower_bound_times, start_time, proc_id,
+                                  upper_bound_times, max_runtime,
+                                  verbose=verbose)
+        if output is not True: # Termination condition
+            return output
+
+        if (max_runtime is not None) and (time.time() - start_time) > max_runtime:
+            return output
+
+
+
+def update_step_loop(piecewise_net, x, true_label, pqueue, seen_polytopes,
+                     heuristic_dict, lp_norm,
+                     pq_decision_bounds, potential, missed_polytopes,
+                     problem_type, polytope_graph,
+                     lower_bound_times, start_time, proc_id, upper_bound_times,
+                     max_runtime, verbose=True):
+    """ Inner loop for how to update the priority queue. This handles one
+        particular thing being popped off the PQ
+    """
+    # Build the polytope to pop from the queue
+
+    poly_out = update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
+                                      heuristic_dict, lp_norm,
+                                      pq_decision_bounds, potential,
+                                      problem_type,
+                                      lower_bound_times, start_time, proc_id,
+                                      verbose=verbose)
+
+    if isinstance(poly_out, bool): # bubble up booleans
+        return poly_out
+
+    new_poly, domain, dead_constraints = poly_out
+
+    # Build facets, reject what we can, and do optimization on the rest
+    return update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
+                                       seen_polytopes, domain, dead_constraints,
+                                       new_poly, lp_norm,
+                                       pq_decision_bounds, potential,
+                                       missed_polytopes,
+                                       problem_type, polytope_graph,
+                                       heuristic_dict, upper_bound_times,
+                                       start_time, max_runtime,
+                                       verbose=verbose)
+
+
+
+def update_step_build_poly(piecewise_net, x, pqueue, seen_polytopes,
+                           heuristic_dict, lp_norm,
+                           pq_decision_bounds, potential,
+                           problem_type, lower_bound_times, start_time,
+                           proc_id, verbose=True):
+    """ Component method of the loop.
+        1) Pops the top PQ element off and rejects it as seen before if so
+        2) Collect the domain/heuristics
+        3) builds the new polytope and returns the polytope
+    """
+    ##########################################################################
+    #   Step 1: pop something off the queue                                  #
+    ##########################################################################
+    try:
+        item = heapq.heappop(pqueue)
+    except IndexError:
+        return False
+
+    #priority, config, tight_constraint, proj, facet_type = item
+    if item.priority < 0: #item.priority < 0: # Termination condition -- bubble up the termination
+        return False
+    if item.facet_type == 'decision': # Termination condition -- bubble up
+        heapq.heappush(pq_decision_bounds, item)
+        #pq_decision_bounds.put(item)
+
+        return False
+
+    # Update the lower bound queue
+    lower_bound_times.append(((time.time() - start_time), item.priority))
+
+
+    new_configs = utils.get_new_configs(item.config, item.tight_constraint)
+    if utils.flatten_config(new_configs) in seen_polytopes:
+        return True # No need to go further, but don't terminate!
+    else:
+        seen_polytopes[utils.flatten_config(new_configs)] = True
+
+
+
+    ##########################################################################
+    #   Step 2: Gather the domain and dead neurons                           #
+    ##########################################################################
+
+    domain = heuristic_dict['domain']
+    current_upper_bound = domain.current_upper_bound(lp_norm) or 1e10
+
+    verbose_print("(p%s) Popped: %.06f  | %.06f" %
+                  (proc_id, item.priority, current_upper_bound),
+                  verbose=verbose)
+    assert isinstance(domain, Domain)
+    dead_constraints = heuristic_dict['dead_constraints']
+    lipschitz_ub = heuristic_dict['fast_lip']
+    c_vector = heuristic_dict['c_vector']
+
+    ##########################################################################
+    #   Step 3: Build polytope and return                                    #
+    ##########################################################################
+
+    new_poly_dict = piecewise_net.compute_polytope_config(new_configs, False)
+    new_poly = Polytope.from_polytope_dict(new_poly_dict, x,
+                                           domain=domain,
+                                           dead_constraints=dead_constraints,
+                                           lipschitz_ub=lipschitz_ub,
+                                           c_vector=c_vector)
+
+    return new_poly, domain, dead_constraints
+
+
+
+
+def update_step_handle_polytope(piecewise_net, x, true_label, pqueue,
+                                seen_polytopes, domain, dead_constraints,
+                                new_poly, lp_norm,
+                                pq_decision_bounds, potential,
+                                missed_polytopes,
+                                problem_type, polytope_graph, heuristic_dict,
+                                upper_bound_times, start_time, max_runtime,
+                                verbose=True):
+    """ Component method of the loop
+        1) Makes facets, rejecting quickly where we can
+        2) Run convex optimization on everything we can't reject
+        3) Push the updates to the process-safe objects
     """
 
-    true_label = int(net(x).max(1)[1].item()) # what the classifier outputs
-    seen_to_polytope_map = {} # binary config str -> Polytope object
-    seen_to_facet_map = {} # binary config str -> Facet list
-    pq = [] # Priority queue that contains HeapElements
+    ##########################################################################
+    #   Step 1: Make new facets while doing fast rejects                     #
+    ##########################################################################
+    new_facets, rejects = new_poly.generate_facets_configs(seen_polytopes,
+                                                           missed_polytopes)
 
-
-    ###########################################################################
-    #   Initialization phase: compute polytope containing x                   #
-    ###########################################################################
-    print('---Initial Polytope---')
-    p_0_dict = net.compute_polytope(x, True)
-    p_0 = Polytope.from_polytope_dict(p_0_dict)
-    geocert_update_step(lp_norm, net, x, p_0, None, pq, true_label,
-                        seen_to_polytope_map, seen_to_facet_map)
-
+    if problem_type != 'count_regions':
+        adv_constraints = piecewise_net.make_adversarial_constraints(new_poly,
+                                                            true_label, domain)
+    else:
+        adv_constraints = []
 
 
     ##########################################################################
-    #   Incremental phase -- repeat until we hit a decision boundary         #
+    #   Step 2: Compute the min-dists/feasibility checks using LP/QP         #
     ##########################################################################
-    index = 0
 
-    while True:
-        # Pop a facet from the heap
-        pop_el = heapq.heappop(pq)
+    # -- compute the distances
+    chained_facets = itertools.chain(new_facets, adv_constraints)
+    parallel_args = [(_, x) for _ in chained_facets]
+    dist_selector = {'l_2': Face.l2_dist_gurobi,
+                     'l_inf': Face.linf_dist_gurobi}
+    lp_dist = dist_selector[lp_norm]
+    dist_fxn = lambda el: (el[0], lp_dist(*el))
 
-        # If only an estimate, make it exact and push it back onto the heap
-        if pop_el.exact_or_estimate == 'estimate':
-            exact_lp_dist = pop_el.facet.lp_dist(x)
-            new_heap_el = HeapElement(exact_lp_dist, pop_el.facet,
-                                      decision_bound=pop_el.decision_bound,
-                                      exact_or_estimate='exact')
-            heapq.heappush(pq, new_heap_el)
+    outputs = [dist_fxn(_) for _ in parallel_args]
+    updated_domain = False
 
-        # If popped element is part of the decision boundary then DONE
-        if pop_el.decision_bound:
-            print('----------Minimal Projection Generated----------')
-            if plot_iter is not None:
-                geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
-                                  x, plot_dir, n_colors, iter=index)
-            return pop_el.lp_dist
+    # -- collect the necessary facets to add to the queue
+    current_upper_bound = domain.current_upper_bound(lp_norm)
+    pq_elements_to_push = []
+    fail_count = 0
+    for facet, (dist, proj) in outputs:
+        try:
+            new_facet_conf = utils.flatten_config(facet.get_new_configs())
+        except:
+            new_facet_conf = None
+        if dist is None:
+            rejects['optimization infeasible'] += 1
+            if facet.facet_type == 'decision':
+                continue
+            # Handle infeasible case
 
-        # Otherwise, find ReLu configuration on other side of the facet
-        # and expand the search space
-        else:
-            print('---Opening New Polytope---')
+            missed_polytopes[new_facet_conf] = True
+            fail_count += 1
+            continue
+        if polytope_graph is not None:
+            edge = (utils.flatten_config(new_poly.config),
+                    new_facet_conf)
+            polytope_graph[edge] = dist
 
-            popped_facet = pop_el.facet
-            new_configs = popped_facet.get_new_configs(net)
-            new_configs_flat = utils.flatten_config(new_configs)
+        if current_upper_bound is not None and dist > current_upper_bound:
+            #Handle the too-far-away facets
+            continue
 
-            # If polytope has already been seen, don't add it again
-            if new_configs_flat not in seen_to_polytope_map:
-                new_polytope_dict = net.compute_polytope_config(new_configs, True)
-                new_polytope = Polytope.from_polytope_dict(new_polytope_dict)
-                geocert_update_step(lp_norm, net, x, new_polytope, popped_facet, pq, true_label,
-                                    seen_to_polytope_map, seen_to_facet_map)
+        rejects['optimization successful'] += 1
+        new_pq_element = PQElement()
+        for k, v in {'priority': dist,
+                     'config': new_poly.config,
+                     'tight_constraint': facet.tight_list[0],
+                     'projection': proj,
+                     'facet_type': facet.facet_type}.items():
+            setattr(new_pq_element, k, v)
 
-            else:
-                print('weve already seen that polytope')
+        pq_elements_to_push.append(new_pq_element)
 
-        if plot_iter is not None:
-            if(index % plot_iter == 0 ):
-                geocert_plot_step(lp_norm, seen_to_polytope_map, pq, pop_el.lp_dist,
-                                  x, plot_dir, n_colors, iter=index)
-        index = index + 1
-
-
-def geocert_update_step(lp_norm, net, x, polytope, popped_facet, pr_queue, true_label,
-                        seen_to_polytope_map, seen_to_facet_map):
-    ''' Given next polytope from popped heap element: finds new polytope facets,
-        pushes facets to the heap, and updates seen maps
-    '''
-
-    polytope_facets, reject_reasons = polytope.generate_facets_configs(seen_to_polytope_map, net, check_feasible=True)
-    print('num facets: ', len(polytope_facets))
-
-
-    polytope_config = utils.flatten_config(polytope.config)
-    polytope_adv_constraints = net.make_adversarial_constraints(polytope.config,
-                                                           true_label)
-    seen_to_polytope_map[polytope_config] = polytope
-    seen_to_facet_map[polytope_config] = polytope_facets
+        if facet.facet_type == 'decision':
+            if problem_type == 'decision_problem':
+                # If in decision_problem style, just return
+                heapq.heappush(pq_decision_bounds, new_pq_element)
+                return True
 
 
-    for facet in polytope_facets:
-        if popped_facet is not None:
-            if not (popped_facet.check_same_facet_config(facet)):
-                # Only add to heap if new face isn't the popped facet
-                lp_dist = get_lp_dist(lp_norm, facet, x)
-                heap_el = HeapElement(lp_dist, facet, decision_bound=False,
-                                      exact_or_estimate='exact')
-                heapq.heappush(pr_queue, heap_el)
-        else:
-            # For first time use, popped facet doesn't exist
-            # so we can't check against it
-            lp_dist = get_lp_dist(lp_norm, facet, x)
-            heap_el = HeapElement(lp_dist, facet, decision_bound=False,
-                                  exact_or_estimate='exact')
-            heapq.heappush(pr_queue, heap_el)
+            updated_domain = True
+            # If also a decision bound, update the upper_bound
+            domain.set_upper_bound(dist, lp_norm)
+            # update l_inf bound in l_2 case as well
+            if lp_norm == 'l_2':
+                new_linf = abs(proj - x).max()
+                domain.set_upper_bound(new_linf, 'l_inf')
+            current_upper_bound = domain.current_upper_bound(lp_norm)
 
-    for facet in polytope_adv_constraints:
+    ##########################################################################
+    #   Step 3: Process all the updates and return                           #
+    ##########################################################################
 
-        lp_dist = get_lp_dist(lp_norm, facet, x)
-        heap_el = HeapElement(lp_dist, facet, decision_bound=True,
-                              exact_or_estimate='exact')
-        heapq.heappush(pr_queue, heap_el)
-
-def get_lp_dist(lp_norm, facet, x):
-    if lp_norm == 'l_2':
-        return facet.l2_dist(x)[0]
-    elif lp_norm == 'l_inf':
-        return facet.linf_dist(x)[0]
-    else:
-        raise NotImplementedError
+    # -- push objects to priority queue
+    for pq_element in pq_elements_to_push:
+        heapq.heappush(pqueue, pq_element)
 
 
-def geocert_plot_step(lp_norm, seen_to_polytope_map, facet_heap_elems,
-                      t, x, plot_dir, n_colors, ax=None, iter=0):
-    ''' Plots the current search boundary based on the heap, the seen polytopes,
-        the current minimal lp ball, and any classification boundary facets
-    '''
-
-
-    # Check x is 2dimensional
-    if np.shape(x)[1] != 2:
-        return
-
-    # Plot Polytopes, etc.
-
-    plt.figure(figsize=[10, 10])
-    if ax is None:
-        ax = plt.axes()
-    polytope_list = [seen_to_polytope_map[elem] for elem in seen_to_polytope_map]
-    facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if not heap_elem.decision_bound]
-    boundary_facet_list = [heap_elem.facet for heap_elem in facet_heap_elems if heap_elem.decision_bound]
-    colors = utils.get_spaced_colors(n_colors)[0:len(polytope_list)]
-
-    xylim = 50.0
-
-    utils.plot_polytopes_2d(polytope_list, colors=colors, alpha=0.7,
-                          xylim=5, ax=ax, linestyle='dashed', linewidth=0)
-
-    utils.plot_facets_2d(facet_list, alpha=0.7,
-                   xylim=xylim, ax=ax, linestyle='dashed', linewidth=3, color='black')
-
-    utils.plot_facets_2d(boundary_facet_list, alpha=0.7,
-                   xylim=xylim, ax=ax, linestyle='dashed', linewidth=3, color='red')
-
-    if lp_norm == 'l_inf':
-        utils.plot_linf_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
-    elif lp_norm == 'l_2':
-        utils.plot_l2_norm(x, t, linewidth=1, edgecolor='red', ax=ax)
-    else:
-        raise NotImplementedError
-
-    plt.autoscale()
-    new_xlims = plt.xlim()
-    new_ylims = plt.ylim()
-
-    if min(new_xlims) > -xylim and max(new_xlims) < xylim and min(new_ylims) > -xylim and max(new_ylims) < xylim:
-        pass
-    else:
-        plt.xlim(-xylim, xylim)
-        plt.ylim(-xylim, xylim)
-    filename = plot_dir + str(iter) + '.png'
-    plt.savefig(filename)
-    plt.close()
+    # -- call the update domain to try and compute tighter stable neurons
+    if updated_domain:
+        update_domain(domain, piecewise_net, x, heuristic_dict, potential,
+                      lp_norm, None, upper_bound_times, start_time,
+                      max_runtime, verbose=verbose)
+    return True
 
 
 
 
+
+def update_domain(new_domain, piecewise_net, x, heuristic_dict, potential,
+                  lp_norm,  bound_fxn, upper_bound_times, start_time,
+                  max_runtime, verbose=True):
+    linf_radius = new_domain.linf_radius or 1e10
+    l2_radius = new_domain.l2_radius or 1e10
+    verbose_print('-' * 20, "DOMAIN UPDATE | L_inf %.06f | L_2 %.06f" %
+                  (linf_radius, l2_radius), verbose=verbose)
+
+    # Record the update in the upper_bound_times log
+    attr = {'l_inf': 'linf_radius',
+            'l_2':   'l2_radius'}[lp_norm]
+
+    upper_bound_times.append((time.time() - start_time,
+                              getattr(new_domain, attr)))
+
+
+    # Update the current domain and change the heuristic dict
+    heuristic_dict['domain'] = new_domain
+
+
+    # And use the domain to compute the new dead constraints
+    new_bounds = piecewise_net.compute_interval_bounds(new_domain)
+    # new_bounds = bound_fxn(piecewise_net, domain)
+    dead_constraints = utils.ranges_to_dead_neurons(new_bounds)
+    on_off_neurons = utils.ranges_to_on_off_neurons(new_bounds)
+    heuristic_dict['dead_constraints'] = dead_constraints
+
+    # Use the domain to update the lipschitz bound on everything
+    # (this can only shrink as we shrink the domain)
+    if potential == 'lipschitz':
+        # Just assume binary classifiers for now
+        dual_lp = utils.dual_norm(lp_norm)
+        c_vector, lip_value = piecewise_net.fast_lip_all_vals(x, dual_lp,
+                                                              on_off_neurons)
+        heuristic_dict['fast_lip'] = lip_value

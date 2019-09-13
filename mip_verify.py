@@ -12,7 +12,7 @@ import time
 
 
 def looper(start, max_val):
-    current = start 
+    current = start
     while current <= max_val:
         yield current
         current *= 2
@@ -24,21 +24,21 @@ def looper(start, max_val):
 #                                                                            #
 ##############################################################################
 
-def mip_min_dist(network, x, lp_norm='l_inf', box_bounds=None, radius_list=None, 
+def mip_min_dist(network, x, lp_norm='l_inf', box_bounds=None, radius_list=None,
                  timeout=None):
-    
+
     if radius_list is None:
         # Do binary-increasing sequence of radii if none specified
-        radius_list = looper(*{'l_inf': (0.05, 1.0), 
+        radius_list = looper(*{'l_inf': (0.05, 1.0),
                                'l_2': (0.5, 10.0)}[lp_norm])
 
-    start_time = time.time() 
+    start_time = time.time()
 
     # First compute the pre-relus to be reused throughout:
 
     # Then loop through all the radii until we either solve or timeout
 
-    
+
 
     for radius in radius_list:
         print('-' * 20, 'STARTING RADIUS ', radius, '-' * 20)
