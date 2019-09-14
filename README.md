@@ -9,7 +9,7 @@ Some example results:
 
 Maximal l_2 projections           | Network Input Partioning
 -----------------------------------------|-----------------------------------------
-<img src="https://github.com/revbucket/geometric-certificates/blob/master/paper/Figures/%5B50%2C8%2C2%5D/non_robust_projections_l2.svg" alt="example" width="400"> | <img src="https://github.com/revbucket/geometric-certificates/blob/master/paper/Figures/%5B50%2C8%2C2%5D/locus_PG_plot_non_robust.svg" alt="mnist_reconstr" width="400">
+<img src="https://github.com/revbucket/geometric-certificates/blob/master/assets/%5B50%2C8%2C2%5D/non_robust_projections_l2.svg" alt="example" width="400"> | <img src="https://github.com/revbucket/geometric-certificates/blob/master/assets/%5B50%2C8%2C2%5D/locus_PG_plot_non_robust.svg" alt="mnist_reconstr" width="400">
 
 ---
 # News
