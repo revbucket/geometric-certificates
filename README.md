@@ -1,6 +1,8 @@
 # GeoCert
 
-Geometric-inspired algorithm for solving the general problem of finding the largest l_p ball centered at a point x for a union of polytopes which form a polyhedral complex. This algorithm is provably correct for p equal or larger than 1. Primary application found in certifying the adversarial robustness of multilayer ReLu networks. Created by [Matt Jordan](https://cs.utexas.edu/~mjordan) and Justin Lewis. Check out our paper on arXiv: [Provable Certificates for Adversarial Examples: Fitting a Ball in the Union of Polytopes](https://arxiv.org/abs/1903.08778).
+Geometric-inspired algorithm for solving the general problem of finding the largest l_p ball centered at a point x for a union of polytopes which form a polyhedral complex. This algorithm is provably correct for p equal or larger than 1. Primary application found in certifying the adversarial robustness of multilayer ReLu networks. Created by [Matt Jordan](https://cs.utexas.edu/~mjordan) and Justin Lewis. 
+
+Check out our paper on arXiv: [Provable Certificates for Adversarial Examples: Fitting a Ball in the Union of Polytopes](https://arxiv.org/abs/1903.08778).
 
 
 Some example results:
@@ -19,9 +21,9 @@ Maximal l_2 projections           | Network Input Partioning
 
 
 ### Functions:
-- Computing the minimal distance adversarial example under $\ell_2$ and $\ell_p$ norms. That is, given a classifier $f$ and an input $x$, GeoCert computes the $\delta$ with minimal $\ell_{2/\infty}$ norm such that $f(x)\neq f(x+\delta)$.
-- Answering the decision problem of robustness. Given a classifier $f$, an input $x$ and a radius $\epsilon$, answer the decision problem: "Does there exist a point $y$ with $||y-x||_p \leq \epsilon$ such that $f(y)\neq f(x)$?"
-- Recalling that ReLU neural networks are piecewise linear, GeoCert can be leveraged to exactly count the number of linear regions intersecting a specified $\ell_p$ ball.
+- Computing the minimal distance adversarial example under L<sub>2</sub> and L<sub>&#8734;</sub> norms. That is, given a classifier _f_ and an input _x_, GeoCert computes the &delta; with minimal L<sub>p</sub> norm such that f(x) &ne; f(x+&delta;).
+- Answering the decision problem of robustness. Given a classifier _f_, an input _x_ and a radius &epsilon;, answer the decision problem: "Does there exist a point _y_ with ||y-x||<sub>p</sub> &le; &epsilon; such that f(y)&ne; f(x)?"
+- Recalling that ReLU neural networks are piecewise linear, GeoCert can be leveraged to exactly count the number of linear regions intersecting a specified L<sub>p</sub> ball.
 
 ### Examples:
 * __2D_example.ipynb:__ Basic example using a binary classifier on 2-dimensional inputs to demonstrate the primary functionalities of GeoCert
