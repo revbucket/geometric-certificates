@@ -2,7 +2,7 @@
     (i.e. RGB images i.e. tensors of the form NxCxHxW )
 """
 from __future__ import print_function
-import utils.pytorch_utils as utils
+from . import pytorch_utils as utils
 import torch
 import numpy as np
 import scipy.misc

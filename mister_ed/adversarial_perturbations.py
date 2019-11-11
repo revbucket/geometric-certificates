@@ -7,9 +7,9 @@ TODO: this needs to be fleshed out, as a general technique to make adversarial
 
 import torch
 import torch.nn as nn
-import spatial_transformers as st
-import utils.image_utils as img_utils
-import utils.pytorch_utils as utils
+from . import spatial_transformers as st
+from .utils import image_utils as img_utils
+from .utils import pytorch_utils as utils
 from torch.autograd import Variable
 import functools
 
