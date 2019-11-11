@@ -549,3 +549,242 @@ class PLNN_seq(PLNN):
         self.fcs = [layer for layer in sequential if type(layer) == nn.Linear]
 
         self.net = sequential
+
+
+class LinearRegionCollection(object):
+    """ Takes a ReturnObj and builds a lot of linear regions and stores them
+    """
+
+    def __init__(self, plnn_obj, return_obj, objective_vec=None, 
+                 do_setup=False):
+        self.plnn_obj = plnn_obj
+        self.return_obj = return_obj
+        self.collection = {}
+        for config in return_obj.seen_polytopes:
+            self.collection[config] = LinearRegion(plnn_obj, config, 
+                                                   return_obj=return_obj,
+                                                   objective_vec=objective_vec, 
+                                                   do_setup=do_setup)
+
+    def get_maximum_lipschitz_constant(self):
+        return max(_.get_lipschitz_constant() 
+                   for _ in self.collection.values())
+
+    def gradient_angle_list(self):
+        """ Gets the gradient angles between neighboring linear regions """
+        angle_list = {} 
+        for (u, v) in self.return_obj.polytope_graph.keys():
+            u_grad = self.collection[u].get_gradient() 
+            v_grad = self.collection[v].get_gradient() 
+            angle_list[(u, v)] = utils.angle(u_grad, v_grad)
+        return angle_list
+
+    def gradient_magnitude_diff_list(self, grad_fxn=None):
+        """ Gets the magnitude of gradient difference 
+            between neighboring linear regions
+        """
+
+        if grad_fxn is None:
+            grad_fxn = lambda u, v: torch.norm(u - v).item() 
+        output = {} 
+        for (u, v) in self.return_obj.polytope_graph.keys():
+            u_grad = self.collection[u].get_gradient()
+            v_grad = self.collection[v].get_gradient()
+            output[(u, v)] = grad_fxn(u_grad, v_grad)
+        return output
+
+
+    def get_greedy_lipschitz_components(self):
+        """ Returns dict of str -> [str1, ..., ] mapping locally maximal
+            linear regions to the set of regions that will greedily 
+            approach this local max
+        """
+        # Let's just be really naive about this 
+
+        def get_ascent_neighbor(node): 
+            """ Gets the neighbor that has highest lipschitz constant 
+                Returns None if nothing has higher than this one 
+            """
+
+            current = node.get_lipschitz_constant() 
+            neighbors = [(_, _.get_lipschitz_constant()) 
+                          for _ in node.get_neighbors()]
+            max_neighbor = max(neighbors, key=lambda p: p[1])
+            if max_neighbor[1] > current:
+                return max_neighbor[0] 
+            return None 
+
+        def greedy_search_single_node(start_config):
+            """ Start with a single sign_config and do greedy search
+                to find max_lipschitz constant. Return the sign_config
+                of the greedy search output 
+            """
+            current_node = self.collection[start_config]
+            while True: 
+                next_node = get_ascent_neighbor(current_node)
+                if next_node is None:
+                    break 
+                else:
+                    current_node = next_node
+            return current_node.sign_config
+
+        greedy_output = {} 
+        for config in self.collection.keys(): 
+            greedy_parent = greedy_search_single_node(config)
+            if greedy_parent not in greedy_output:
+                greedy_output[greedy_parent] = []
+            greedy_output[greedy_parent].append(config)
+
+        return greedy_output
+
+
+
+class LinearRegion(object):
+    """ Holds info and shortcuts to work with linear regions """
+    @classmethod
+    def process_return_obj(cls, plnn_obj, return_obj, objective_vec=None,
+                           do_setup=False):
+        """ Given a GeoCertReturn object, will build a linear region for
+            all of the 'seen polytopes' and return the outputs in a
+            dict keyed on teh sign_configs
+        """
+
+        output = {}
+        for config in return_obj.seen_polytopes:
+            output[config] = cls(plnn_obj, config,
+                                 return_obj=return_obj,
+                                 objective_vec=objective_vec,
+                                 do_setup=do_setup)
+        return output
+
+
+    def __init__(self, plnn_obj, sign_config, return_obj=None,
+                 objective_vec=None, do_setup=False):
+        """ Initializes a Linear Region object
+        ARGS:
+            plnn_obj - the network this region is linear for
+            sign_config - the neuron configuration of the region
+            return_obj : GeoCertReturn object - if not None is an
+                         output of GeoCert which contains info about
+                         the linear regions.
+        """
+        super(LinearRegion, self).__init__()
+        self.plnn_obj = plnn_obj
+        self.sign_config = sign_config
+        self.hex_config = hex(int(self.sign_config, 2))
+        self.return_obj = return_obj
+        self.objective_vec = objective_vec
+
+        # setting up attributes to be stored later
+        self._polytope_config = None
+        self.polytope = None
+        self.linear_map = None
+        self.jacobian = None
+        self.largest_sv = None
+
+        if do_setup:
+            self.setup()
+
+    def __repr__(self):
+        return "LinearRegion: %s" % self.hex_config
+
+    def get_neighbors(self):
+        """ If the return obj is not None, will error. Otherwise will
+            return a list of neighboring LinearRegion objects
+        """
+        assert self.return_obj is not None
+        neigbor_list = []
+        for edge in self.return_obj.polytope_graph:
+            if self.sign_config == edge[0]:
+                neigbor_idx = 1
+            elif self.sign_config == edge[1]:
+                neigbor_idx = 0
+            else:
+                continue
+            neigbor_list.append(edge[neigbor_idx])
+
+        return [LinearRegion(self.plnn_obj, neigbor_config,
+                             return_obj=self.return_obj,
+                             objective_vec=self.objective_vec)
+                for neigbor_config in neigbor_list]
+
+
+    def _get_polytope_config(self):
+        if self._polytope_config is not None:
+            return self._polytope_config
+
+        plnn_obj = self.plnn_obj
+        config = plnn_obj.config_str_to_config_list(self.sign_config)
+        self._polytope_config = plnn_obj.compute_polytope_config(config)
+        return self._polytope_config
+
+
+    def setup(self):
+        self.get_polytope()
+        self.get_linear_map()
+        self.get_jacobian()
+        self.get_largest_singular_value()
+
+
+    def get_polytope(self):
+        """ For this linear region will return the polytope for which
+            the neural net satisfies the given neuron configuration
+        """
+        if self.polytope is not None:
+            return self.polytope
+
+        _polytope_config = self._get_polytope_config()
+        self.polytope = {'A': _polytope_config['poly_a'],
+                         'b': _polytope_config['poly_b']}
+        return self.polytope
+
+
+    def get_linear_map(self):
+        """ For this linear region will return a torch.nn.Linear
+            object corresponding to the linear map at this neuron
+            configuration
+        """
+        if self.linear_map is not None:
+            return self.linear_map
+        _polytope_config = self._get_polytope_config()
+        A = nn.Parameter(_polytope_config['total_a'])
+        b = nn.Parameter(_polytope_config['total_b'])
+        linear_map = nn.Linear(*A.shape)
+        linear_map.weight = A
+        linear_map.bias = b
+
+        self.linear_map = linear_map
+        return self.linear_map
+
+    def get_jacobian(self):
+        """ For this linear region will get the jacobian at this
+            linear piece
+        """
+        if self.jacobian is not None:
+            return self.jacobian
+
+        linear_map = self.get_linear_map()
+        self.jacobian = linear_map.weight
+        return self.jacobian
+
+    def get_largest_singular_value(self):
+        """ Will return the largest singular value of the jacobian
+            of this linear region
+        """
+        if self.largest_sv is not None:
+            return self.largest_sv
+
+        jacobian = self.get_jacobian()
+        self.largest_sv = jacobian.svd().S[0].item()
+        return self.largest_sv
+
+    def get_gradient(self):
+        assert self.objective_vec is not None
+        return self.objective_vec.matmul(self.get_jacobian())
+
+    def get_lipschitz_constant(self):
+        if self.objective_vec is not None:
+            return self.objective_vec.matmul(self.get_jacobian()).norm().item()
+        else:
+            return self.get_largest_singular_value()
+
