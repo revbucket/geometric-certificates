@@ -243,6 +243,9 @@ def is_same_tight_constraint(a1, b1, a2, b2, tolerance=global_tolerance):
 ##########################################################################
 
 
+def angle(u, v):
+    """ Returns the angle between u and v """ 
+    return torch.acos(u.dot(v) / (u.norm() * v.norm())).item() 
 
 def geometric_mean(M, x, t):
     '''
