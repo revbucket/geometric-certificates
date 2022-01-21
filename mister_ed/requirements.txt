@@ -4,7 +4,7 @@ cycler==0.10.0
 dask==0.20.1
 decorator==4.3.0
 ipykernel==5.1.0
-ipython==7.1.1
+ipython==7.16.3
 ipython-genutils==0.2.0
 jedi==0.13.1
 jupyter-client==5.2.3
